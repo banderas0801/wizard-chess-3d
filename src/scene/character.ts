@@ -13,6 +13,7 @@ import {
   Group,
   LoopOnce,
   LoopRepeat,
+  Vector3,
   type AnimationAction,
   type AnimationClip,
   type Material,
@@ -96,6 +97,10 @@ interface Rig {
   readonly actions: ReadonlyMap<ClipKey, AnimationAction>;
   /** Rotates about the hind hooves to rear up. */
   readonly pivot: Object3D;
+  /** Slides along the piece's forward axis while rearing so the hind hooves stay over the base. */
+  readonly mount: Object3D;
+  /** Hind leg bones (the hooves the horse rears on). */
+  readonly hind: readonly Object3D[];
   /** The rider's lance: raised at rest, couched for the charge. */
   readonly lance: Object3D;
   current: AnimationAction | null;
@@ -128,6 +133,18 @@ export function lanceAngle(k: number): number {
   const ease = (w: number): number => w * w * (3 - 2 * w);
   const couch = k < 0.25 ? ease(k / 0.25) : k < 0.7 ? 1 : 1 - ease((k - 0.7) / 0.3);
   return LANCE_REST + (LANCE_COUCHED - LANCE_REST) * couch;
+}
+
+/** The clip kicks the hind legs back at take-off; while rearing, slide the horse so they stay on the base. */
+const HIND_BONES = ['BackLowerLegL', 'BackLowerLegR'];
+const tmp = new Vector3();
+function keepHindOverBase(obj: Object3D, rig: Rig, weight: number): void {
+  if (rig.hind.length === 0) return;
+  obj.updateMatrixWorld(true);
+  let x = 0;
+  for (const b of rig.hind) x += obj.worldToLocal(b.getWorldPosition(tmp)).x;
+  x = x / rig.hind.length - rig.mount.position.x; // where the hooves are with the mount unshifted
+  rig.mount.position.x = -x * weight;
 }
 
 /** Spine bone over the saddle that carries the rider. */
@@ -201,7 +218,7 @@ export function createCharacterAnimator(
     const actions = new Map<ClipKey, AnimationAction>();
     for (const [k, clip] of kit.clips) actions.set(k, mixer.clipAction(clip));
     const rig: Rig = {
-      mixer, actions, pivot, lance: rider.lance, current: null, hold: 0, rearT: 0, rearDur: 0, shatterIn: -1, shatterDuration: 0, dead: false,
+      mixer, actions, pivot, mount, hind: HIND_BONES.map((n) => ch.getObjectByName(n)).filter((b) => b !== undefined), lance: rider.lance, current: null, hold: 0, rearT: 0, rearDur: 0, shatterIn: -1, shatterDuration: 0, dead: false,
     };
     rigs.set(obj, rig);
     fade(rig, 'idle', 0, 1);
@@ -226,6 +243,7 @@ export function createCharacterAnimator(
     rig.rearT = 0;
     rig.rearDur = 0;
     rig.pivot.rotation.x = 0;
+    rig.mount.position.x = 0;
     rig.lance.rotation.x = LANCE_REST;
   };
 
@@ -323,7 +341,8 @@ export function createCharacterAnimator(
         }
         if (rig.rearDur > 0) {
           rig.rearT = Math.min(rig.rearDur, rig.rearT + dt);
-          rig.pivot.rotation.x = -rearAngle(rig.rearT / rig.rearDur);
+          const rear = rearAngle(rig.rearT / rig.rearDur);
+          rig.pivot.rotation.x = -rear;
           rig.lance.rotation.x = lanceAngle(rig.rearT / rig.rearDur);
           if (rig.rearT >= rig.rearDur) settle(rig);
         }
@@ -333,6 +352,7 @@ export function createCharacterAnimator(
         }
         // Idle loops only breathe when the tier allows idle motion (tier off stays still).
         if (rig.hold > 0 || base.idleSway) rig.mixer.update(dt);
+        if (rig.rearDur > 0) keepHindOverBase(obj, rig, Math.max(0, rearAngle(rig.rearT / rig.rearDur) / REAR));
       }
     },
     cancel() {
