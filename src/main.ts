@@ -88,10 +88,12 @@ async function main(): Promise<void> {
   const FRAGMENTS: Record<QualityTier, number> = { high: 18, low: 10, off: 5 };
 
   const proc = createProceduralAnimator({ fragments: FRAGMENTS[startTier] });
-  // Step 4b: knights become rigged Quaternius characters (CC0) once the FBX arrives; `?characters=0` opts out.
+  // Step 4b: knights become a rigged Quaternius horse (CC0) on their turned base once the glTF arrives;
+  // `?characters=0` opts out.
   const animator = createCharacterAnimator(proc, 'knight', {
     body: (c) => getMaterials(detail)[c === 'white' ? 'ivory' : 'ebony'],
     accent: () => getMaterials(detail).gold,
+    eye: () => getMaterials(detail).ebony,
   });
   animator.idleSway = startTier !== 'off';
   const fx = createStrikeFx();
@@ -207,7 +209,7 @@ async function main(): Promise<void> {
 
   let charactersReady: Promise<unknown> = Promise.resolve();
   if (params.get('characters') !== '0') {
-    charactersReady = loadCharacterKit(`${import.meta.env.BASE_URL}models/quaternius-knight`)
+    charactersReady = loadCharacterKit(`${import.meta.env.BASE_URL}models/quaternius-horse/Horse.glb`)
       .then((kit) => {
         animator.kit = kit;
         // Mid-move the animator holds the old meshes' poses; characters join at the next idle.
