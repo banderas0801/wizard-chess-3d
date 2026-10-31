@@ -6,11 +6,11 @@ import globals from 'globals';
 /** Rendering libraries that the pure game layer must never depend on. */
 export const GAME_BANNED_IMPORTS = {
   paths: [
-    { name: 'three', message: 'src/game/ is pure logic: it must not import three.' },
+    { name: 'three', message: 'src/game/ and src/ai/ are pure logic: they must not import three.' },
   ],
   patterns: [
-    { group: ['three/*', 'three/**'], message: 'src/game/ is pure logic: it must not import three.' },
-    { group: ['**/render/**', '**/scene/**'], message: 'src/game/ must not depend on render/ or scene/.' },
+    { group: ['three/*', 'three/**'], message: 'src/game/ and src/ai/ are pure logic: they must not import three.' },
+    { group: ['**/render/**', '**/scene/**'], message: 'src/game/ and src/ai/ must not depend on render/ or scene/.' },
   ],
 };
 
@@ -22,7 +22,7 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.browser, ...globals.node } },
   },
   {
-    files: ['src/game/**/*.ts'],
+    files: ['src/game/**/*.ts', 'src/ai/**/*.ts'],
     rules: {
       'no-restricted-imports': ['error', GAME_BANNED_IMPORTS],
     },

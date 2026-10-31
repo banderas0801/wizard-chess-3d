@@ -110,9 +110,19 @@ export function createPieces(): PieceLayer {
       for (const [sq, piece] of board) {
         alive.add(piece.id);
         let obj = meshes.get(piece.id);
+        if (obj && obj.userData.type !== piece.type) {
+          // Promotion: same id, new shape.
+          group.remove(obj);
+          obj.traverse((o) => {
+            if (o instanceof Mesh) o.geometry.dispose();
+          });
+          meshes.delete(piece.id);
+          obj = undefined;
+        }
         if (!obj) {
           obj = buildPiece(piece.type, piece.color, materials[piece.color]);
           obj.name = piece.id;
+          obj.userData.type = piece.type;
           meshes.set(piece.id, obj);
           group.add(obj);
           changed = true;

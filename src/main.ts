@@ -6,15 +6,13 @@ import { createPost } from './render/post';
 import { createQualityGovernor, parseTier } from './render/quality';
 import { createBoard } from './scene/board';
 import { createPieces } from './scene/pieces';
-import { initialBoard, movePiece, type Board, type Square } from './game';
+import { applyMove, initialState, legalMoves, outcome, parseUci, toFen, type GameState } from './game';
+import { createAiController } from './ai/controller';
+import { createWorkerPort } from './ai/workerPort';
 
 const HDRI_URL = `${import.meta.env.BASE_URL}hdri/studio_small_08_1k.hdr`;
 const BUDGET_MS = 1000 / 60;
-
-// Demo: each click / keypress plays the next scripted move to exercise the shadow update path.
-const DEMO_MOVES: readonly (readonly [Square, Square])[] = [
-  ['e2', 'e4'], ['e7', 'e5'], ['g1', 'f3'], ['b8', 'c6'], ['f1', 'c4'], ['g8', 'f6'],
-];
+const AI_COLOR = 'black';
 
 async function main(): Promise<void> {
   const hud = document.getElementById('hud')!;
@@ -54,38 +52,90 @@ async function main(): Promise<void> {
   const pieces = createPieces();
   scene.add(pieces.group);
 
-  let board: Board = initialBoard();
-  pieces.sync(board);
+  // ---- game + AI -----------------------------------------------------------
+  let game: GameState = initialState();
+  const history: GameState[] = [];
+  let lastEval: number | null = null;
+  let lastError = '';
+  pieces.sync(game.board);
   markShadowsDirty('init');
 
-  const params = new URLSearchParams(location.search);
-  const forced = parseTier(params.get('tier'));
-  const post = createPost(renderer, scene, camera, forced ?? 'high');
-  const governor = forced ? null : createQualityGovernor({ budgetMs: BUDGET_MS });
-
-  let demoIdx = 0;
-  const playNext = (): void => {
-    if (demoIdx >= DEMO_MOVES.length) {
-      board = initialBoard();
-      demoIdx = 0;
-    } else {
-      const [from, to] = DEMO_MOVES[demoIdx++]!;
-      const r = movePiece(board, from, to);
-      if (!r.ok) return;
-      board = r.board;
-    }
-    if (pieces.sync(board)) markShadowsDirty('piece-move');
+  const show = (): void => {
+    if (pieces.sync(game.board)) markShadowsDirty('piece-move');
   };
+
+  const port = createWorkerPort();
+  const ai = createAiController(port, {
+    applyMove(uci, evalCp) {
+      const m = parseUci(uci);
+      const r = m ? applyMove(game, m) : null;
+      if (!r || !r.ok) return { ok: false, message: `engine returned illegal move ${uci}` };
+      history.push(game);
+      game = r.state;
+      lastEval = evalCp;
+      show();
+      return { ok: true };
+    },
+    showError(message) {
+      lastError = message;
+    },
+  });
+
+  const maybeAskAi = (): void => {
+    if (game.turn === AI_COLOR && !outcome(game)) ai.requestMove(toFen(game), { depth: 1, timeMs: 300 });
+  };
+
+  /** Placeholder human input until square picking lands: play a random legal move for white. */
+  const humanMove = (): void => {
+    if (game.turn === AI_COLOR || outcome(game)) return;
+    if (!ai.userMove()) return; // input locked while the AI is thinking
+    const moves = legalMoves(game);
+    const m = moves[Math.floor(Math.random() * moves.length)];
+    if (!m) return;
+    const r = applyMove(game, m);
+    if (!r.ok) return;
+    history.push(game);
+    game = r.state;
+    lastError = '';
+    show();
+    maybeAskAi();
+  };
+
+  const undo = (): void => {
+    ai.undo(); // cancels any in-flight search and bumps requestId
+    // Undo back to the human's turn.
+    do game = history.pop() ?? game;
+    while (game.turn === AI_COLOR && history.length > 0);
+    show();
+  };
+
+  const reset = (): void => {
+    ai.reset();
+    history.length = 0;
+    game = initialState();
+    lastEval = null;
+    lastError = '';
+    show();
+  };
+
   let downAt: { x: number; y: number } | null = null;
   renderer.domElement.addEventListener('pointerdown', (e) => (downAt = { x: e.clientX, y: e.clientY }));
   renderer.domElement.addEventListener('pointerup', (e) => {
     // Treat as a click only if the pointer barely moved (so orbiting doesn't trigger moves).
-    if (downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) < 5) playNext();
+    if (downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) < 5) humanMove();
     downAt = null;
   });
   window.addEventListener('keydown', (e) => {
-    if (e.key === ' ' || e.key === 'm' || e.key === 'Enter') playNext();
+    if (e.key === ' ' || e.key === 'm' || e.key === 'Enter') humanMove();
+    else if (e.key === 'u') undo();
+    else if (e.key === 'r') reset();
   });
+
+  // ---- quality + render loop -------------------------------------------------
+  const params = new URLSearchParams(location.search);
+  const forced = parseTier(params.get('tier'));
+  const post = createPost(renderer, scene, camera, forced ?? 'high');
+  const governor = forced ? null : createQualityGovernor({ budgetMs: BUDGET_MS });
 
   window.addEventListener('resize', () => {
     const w = window.innerWidth;
@@ -111,9 +161,15 @@ async function main(): Promise<void> {
     hudAcc += dt;
     if (hudAcc > 0.25) {
       hudAcc = 0;
+      const end = outcome(game);
       hud.textContent =
         `tier: ${post.tier}${forced ? ' (forced)' : ''} · ${(dt * 1000).toFixed(1)} ms · ` +
-        `shadow updates: init ${shadowUpdates.init}, moves ${shadowUpdates['piece-move']} · click / space = next move`;
+        `shadow updates: init ${shadowUpdates.init}, moves ${shadowUpdates['piece-move']} · ` +
+        `AI: ${ai.machine.phase.tag} #${ai.machine.currentRequestId}` +
+        (lastEval !== null ? ` eval ${lastEval}cp` : '') +
+        (lastError ? ` · error: ${lastError}` : '') +
+        (end ? ` · ${end}` : '') +
+        ` · ${game.turn} to move · click/space = move, u = undo, r = reset`;
     }
     requestAnimationFrame(frame);
   };
