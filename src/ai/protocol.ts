@@ -2,7 +2,7 @@
 // no shared state, no piece ids, no three objects.
 
 export type ToWorker =
-  | { kind: 'search'; requestId: number; fen: string; depth: number; timeMs: number }
+  | { kind: 'search'; requestId: number; fen: string; timeMs: number }
   | { kind: 'cancel'; requestId: number };
 
 export type FromWorker =
@@ -32,7 +32,7 @@ export function parseFromWorker(x: unknown): FromWorker | null {
 export function parseToWorker(x: unknown): ToWorker | null {
   if (!isObj(x) || !isId(x.requestId)) return null;
   if (x.kind === 'cancel') return { kind: 'cancel', requestId: x.requestId };
-  if (x.kind === 'search' && typeof x.fen === 'string' && isId(x.depth) && typeof x.timeMs === 'number')
-    return { kind: 'search', requestId: x.requestId, fen: x.fen, depth: x.depth, timeMs: x.timeMs };
+  if (x.kind === 'search' && typeof x.fen === 'string' && typeof x.timeMs === 'number')
+    return { kind: 'search', requestId: x.requestId, fen: x.fen, timeMs: x.timeMs };
   return null;
 }

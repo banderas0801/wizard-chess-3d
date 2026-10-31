@@ -26,7 +26,7 @@ export interface Machine {
 }
 
 export type AiEvent =
-  | { readonly type: 'aiTurn'; readonly fen: string; readonly depth: number; readonly timeMs: number }
+  | { readonly type: 'aiTurn'; readonly fen: string; readonly timeMs: number }
   | { readonly type: 'worker'; readonly msg: FromWorker }
   | { readonly type: 'applied' }
   | { readonly type: 'applyFailed'; readonly message: string }
@@ -61,7 +61,7 @@ export function step(m: Machine, ev: AiEvent): Step {
       const requestId = m.currentRequestId + 1;
       return {
         machine: { phase: { tag: 'thinking', requestId }, currentRequestId: requestId },
-        effects: [{ kind: 'post', msg: { kind: 'search', requestId, fen: ev.fen, depth: ev.depth, timeMs: ev.timeMs } }],
+        effects: [{ kind: 'post', msg: { kind: 'search', requestId, fen: ev.fen, timeMs: ev.timeMs } }],
       };
     }
     case 'worker': {

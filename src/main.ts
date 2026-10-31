@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   });
 
   const maybeAskAi = (): void => {
-    if (game.turn === AI_COLOR && !outcome(game)) ai.requestMove(toFen(game), { depth: 1, timeMs: 300 });
+    if (game.turn === AI_COLOR && !outcome(game)) ai.requestMove(toFen(game), { timeMs: 300 });
   };
 
   /** Placeholder human input until square picking lands: play a random legal move for white. */

@@ -15,7 +15,7 @@ export interface AiHost {
 export interface AiController {
   readonly machine: Machine;
   readonly inputLocked: boolean;
-  requestMove(fen: string, opts?: { depth?: number; timeMs?: number }): void;
+  requestMove(fen: string, opts?: { timeMs?: number }): void;
   /** Call BEFORE applying a human move; returns false if input is locked. */
   userMove(): boolean;
   undo(): void;
@@ -69,7 +69,7 @@ export function createAiController(port: AiPort, host: AiHost): AiController {
       return isInputLocked(machine);
     },
     requestMove(fen, opts) {
-      dispatch({ type: 'aiTurn', fen, depth: opts?.depth ?? 1, timeMs: opts?.timeMs ?? 300 });
+      dispatch({ type: 'aiTurn', fen, timeMs: opts?.timeMs ?? 300 });
     },
     userMove() {
       dispatch({ type: 'userMove' });

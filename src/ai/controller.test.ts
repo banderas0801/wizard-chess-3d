@@ -209,7 +209,7 @@ describe('AI controller with a fake worker', () => {
     const ai = createAiController(w.port, g.host);
     ai.requestMove(toFen(g.state));
     const msg = w.posted[0]!;
-    expect(Object.keys(msg).sort()).toEqual(['depth', 'fen', 'kind', 'requestId', 'timeMs']);
+    expect(Object.keys(msg).sort()).toEqual(['fen', 'kind', 'requestId', 'timeMs']);
     expect(JSON.stringify(msg)).not.toMatch(/white-|black-/);
   });
 });
@@ -219,10 +219,10 @@ describe('machine (pure)', () => {
     let m = initialMachine;
     const ids: number[] = [];
     const evs = [
-      { type: 'aiTurn', fen: 'x', depth: 1, timeMs: 1 },
+      { type: 'aiTurn', fen: 'x', timeMs: 1 },
       { type: 'undo' },
       { type: 'userMove' },
-      { type: 'aiTurn', fen: 'x', depth: 1, timeMs: 1 },
+      { type: 'aiTurn', fen: 'x', timeMs: 1 },
       { type: 'reset' },
     ] as const;
     for (const ev of evs) {
@@ -233,7 +233,7 @@ describe('machine (pure)', () => {
   });
 
   it('error/bestmove for a non-current id never leaves thinking', () => {
-    const t = step(initialMachine, { type: 'aiTurn', fen: 'x', depth: 1, timeMs: 1 }).machine;
+    const t = step(initialMachine, { type: 'aiTurn', fen: 'x', timeMs: 1 }).machine;
     for (const msg of [
       { kind: 'bestmove', requestId: 0, uci: 'e2e4', evalCp: 0 },
       { kind: 'error', requestId: 7, message: 'x' },
@@ -252,7 +252,7 @@ describe('machine (pure)', () => {
       const k = Math.floor(rnd() * 6);
       const id = Math.floor(rnd() * (m.currentRequestId + 2));
       const ev =
-        k === 0 ? ({ type: 'aiTurn', fen: 'x', depth: 1, timeMs: 1 } as const)
+        k === 0 ? ({ type: 'aiTurn', fen: 'x', timeMs: 1 } as const)
         : k === 1 ? ({ type: 'worker', msg: { kind: 'bestmove', requestId: id, uci: 'a', evalCp: 0 } } as const)
         : k === 2 ? ({ type: 'worker', msg: { kind: 'error', requestId: id, message: 'e' } } as const)
         : k === 3 ? ({ type: 'undo' } as const)
