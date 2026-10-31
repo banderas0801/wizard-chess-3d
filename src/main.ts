@@ -5,13 +5,14 @@ import { loadEnvironment } from './render/env';
 import { createPost } from './render/post';
 import { createQualityGovernor, parseTier, type QualityTier } from './render/quality';
 import { createProceduralAnimator } from './scene/anim';
+import { createCharacterAnimator, loadCharacterKit } from './scene/character';
 import { createChoreographer } from './scene/choreo';
 import { createStrikeFx, SHAKE_SCALE } from './scene/fx';
 import { planMove } from './scene/plan';
 import { createAnimatorStage } from './scene/stage';
 import { createBoard, squareToWorld } from './scene/board';
 import { createHall, hallColliders } from './scene/hall';
-import { detailForTier } from './scene/materials';
+import { detailForTier, getMaterials } from './scene/materials';
 import { createPieces } from './scene/pieces';
 import { fromFen, initialState, legalMoves, outcome, parseUci, toFen, type GameState, type Move, type Square } from './game';
 import { createAiController } from './ai/controller';
@@ -86,11 +87,17 @@ async function main(): Promise<void> {
   const toggles = { shake: true, closeUp: true };
   const FRAGMENTS: Record<QualityTier, number> = { high: 18, low: 10, off: 5 };
 
-  const animator = createProceduralAnimator({ fragments: FRAGMENTS[startTier] });
+  const proc = createProceduralAnimator({ fragments: FRAGMENTS[startTier] });
+  // Step 4b: knights become rigged Quaternius characters (CC0) once the FBX arrives; `?characters=0` opts out.
+  const animator = createCharacterAnimator(proc, 'knight', {
+    body: (c) => getMaterials(detail)[c === 'white' ? 'ivory' : 'ebony'],
+    accent: () => getMaterials(detail).gold,
+  });
   animator.idleSway = startTier !== 'off';
   const fx = createStrikeFx();
   scene.add(fx.group);
   const idleAll = (): void => {
+    animator.attachAll(pieces.group); // idempotent: new/promoted/re-detailed pieces get their character
     for (const obj of pieces.group.children) animator.play(obj, 'idle');
   };
   pieces.sync(game.board);
@@ -198,13 +205,30 @@ async function main(): Promise<void> {
     show();
   };
 
+  let charactersReady: Promise<unknown> = Promise.resolve();
+  if (params.get('characters') !== '0') {
+    charactersReady = loadCharacterKit(`${import.meta.env.BASE_URL}models/quaternius-knight`)
+      .then((kit) => {
+        animator.kit = kit;
+        // Mid-move the animator holds the old meshes' poses; characters join at the next idle.
+        if (choreo.phase === 'idle') {
+          idleAll();
+          markShadowsDirty('piece-move');
+        }
+      })
+      .catch((e: unknown) => console.warn('character models unavailable, keeping procedural knights', e));
+  }
+
   const demoMove = params.get('play');
   if (demoMove) {
     const m = parseUci(demoMove);
-    setTimeout(() => {
-      if (m && startMove(m)) return;
-      lastError = `demo move ${demoMove} not legal here`;
-    }, Number(params.get('delay') ?? 1500));
+    // Wait for the character models so the demo shows the move as it will normally look.
+    void charactersReady.then(() =>
+      setTimeout(() => {
+        if (m && startMove(m)) return;
+        lastError = `demo move ${demoMove} not legal here`;
+      }, Number(params.get('delay') ?? 1500)),
+    );
   }
 
   let downAt: { x: number; y: number } | null = null;
@@ -257,7 +281,7 @@ async function main(): Promise<void> {
         post.setTier(next);
         tier = next;
         animator.idleSway = next !== 'off';
-        animator.fragments = FRAGMENTS[next];
+        proc.fragments = FRAGMENTS[next];
       }
       const d = detailForTier(tier);
       // Swapping piece meshes mid-animation would orphan the animator's targets: wait for idle.
