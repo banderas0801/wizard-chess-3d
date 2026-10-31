@@ -82,6 +82,7 @@ describe('horse knight (Step 4b)', () => {
     anim.play(knight, 'attack', { to: new Vector3(1, 0, -2), duration: 1 });
     anim.update(0.3);
     expect(pivotOf(knight).rotation.x).toBeLessThan(-0.5); // forelegs up
+    expect(knight.getObjectByName('mount')!.position.x).toBeGreaterThan(0.1); // hind hooves kept over the base
     anim.update(0.2);
     expect(pivotOf(knight).rotation.x).toBeGreaterThan(0); // hooves driven down
     for (let i = 0; i < 12; i++) anim.update(0.05);
@@ -97,6 +98,7 @@ describe('horse knight (Step 4b)', () => {
     anim.update(0.3);
     anim.cancel();
     expect(pivotOf(knight).rotation.x).toBe(0);
+    expect(knight.getObjectByName('mount')!.position.x).toBe(0);
     expect(knight.position.length()).toBeCloseTo(0);
   });
 
