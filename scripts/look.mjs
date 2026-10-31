@@ -1,6 +1,7 @@
 // Headless Chrome screenshots of the built app at fixed camera positions (no moves).
 // Run `npm run build && npx vite preview --port 4173` first.
 // Usage: node scripts/look.mjs <tier> <out.png> [x,y,z] [<out2.png> x,y,z ...]
+// LOOK_QUERY='fen=...&play=c4f7&pause=strike:0.2&fixedDt=0.033' appends app params (demo captures).
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 const [tier = 'high', ...shots] = process.argv.slice(2);
@@ -26,7 +27,7 @@ await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, dev
 for (let i = 0; i < shots.length; i++) {
   const out = shots[i];
   const cam = shots[i + 1] && /^-?[\d.]+,/.test(shots[i + 1]) ? shots[++i] : null;
-  await send('Page.navigate', { url: `http://localhost:4173/?tier=${tier}${cam ? `&cam=${cam}` : ''}` });
+  await send('Page.navigate', { url: `http://localhost:4173/?tier=${tier}${cam ? `&cam=${cam}` : ''}${process.env.LOOK_QUERY ? `&${process.env.LOOK_QUERY}` : ''}` });
   await sleep(Number(process.env.LOOK_WAIT ?? 14000));
   const r = await send('Page.captureScreenshot', { format: 'png' });
   writeFileSync(out, Buffer.from(r.result.data, 'base64'));
