@@ -233,29 +233,55 @@ export function legalMoves(s: GameState): Move[] {
   return pseudoMoves(s).filter((m) => !inCheck(applyMoveUnchecked(s, m), s.turn));
 }
 
-function applyMoveUnchecked(s: GameState, m: Move): GameState {
+/**
+ * What a move does to the board besides moving `piece` from -> to. The engine is the only place
+ * that knows the special-move rules; renderers read this instead of re-deriving them.
+ */
+export interface MoveEffects {
+  readonly piece: Piece;
+  /** Captured piece and the square it stood on (beside `to` for en passant). */
+  readonly capture: { readonly piece: Piece; readonly square: Square; readonly enPassant: boolean } | null;
+  /** Castling: the rook's own move. */
+  readonly castle: { readonly rook: Piece; readonly from: Square; readonly to: Square } | null;
+  /** Promotion: the type the pawn becomes on `to` (same piece id). */
+  readonly promotion: Promotion | null;
+}
+
+function effectsOf(s: GameState, m: Move): MoveEffects {
   const piece = s.board.get(m.from);
   if (!piece) throw new Error(`No piece on ${m.from}`);
-  const next = new Map(s.board);
-  const captured = next.get(m.to);
-  next.delete(m.from);
   const { file: ff, rank: fr } = squareToIndex(m.from);
-  const { file: tf, rank: tr } = squareToIndex(m.to);
-  let epCapture = false;
-  if (piece.type === 'pawn' && m.to === s.enPassant && !captured) {
-    next.delete(indexToSquare(tf, fr));
-    epCapture = true;
+  const { file: tf } = squareToIndex(m.to);
+  const onTo = s.board.get(m.to);
+  let capture: MoveEffects['capture'] = onTo ? { piece: onTo, square: m.to, enPassant: false } : null;
+  if (!onTo && piece.type === 'pawn' && m.to === s.enPassant) {
+    const square = indexToSquare(tf, fr);
+    const victim = s.board.get(square);
+    if (victim) capture = { piece: victim, square, enPassant: true };
   }
+  let castle: MoveEffects['castle'] = null;
   if (piece.type === 'king' && Math.abs(tf - ff) === 2) {
     const [rf, rt] = tf === 6 ? [7, 5] : [0, 3];
-    const rookFrom = indexToSquare(rf, fr);
-    const rook = next.get(rookFrom);
-    if (rook) {
-      next.delete(rookFrom);
-      next.set(indexToSquare(rt, fr), rook);
-    }
+    const from = indexToSquare(rf, fr);
+    const rook = s.board.get(from);
+    if (rook) castle = { rook, from, to: indexToSquare(rt, fr) };
   }
-  next.set(m.to, m.promotion && piece.type === 'pawn' ? { ...piece, type: m.promotion } : piece);
+  const promotion = m.promotion && piece.type === 'pawn' ? m.promotion : null;
+  return { piece, capture, castle, promotion };
+}
+
+function applyMoveUnchecked(s: GameState, m: Move, fx: MoveEffects = effectsOf(s, m)): GameState {
+  const { piece } = fx;
+  const next = new Map(s.board);
+  next.delete(m.from);
+  if (fx.capture) next.delete(fx.capture.square);
+  const { file: ff, rank: fr } = squareToIndex(m.from);
+  const { rank: tr } = squareToIndex(m.to);
+  if (fx.castle) {
+    next.delete(fx.castle.from);
+    next.set(fx.castle.to, fx.castle.rook);
+  }
+  next.set(m.to, fx.promotion ? { ...piece, type: fx.promotion } : piece);
 
   const c = { ...s.castling };
   const touch = (sq: Square): void => {
@@ -274,17 +300,21 @@ function applyMoveUnchecked(s: GameState, m: Move): GameState {
     turn: opposite(s.turn),
     castling: c,
     enPassant: piece.type === 'pawn' && Math.abs(tr - fr) === 2 ? indexToSquare(ff, (fr + tr) / 2) : null,
-    halfmove: piece.type === 'pawn' || captured || epCapture ? 0 : s.halfmove + 1,
+    halfmove: piece.type === 'pawn' || fx.capture ? 0 : s.halfmove + 1,
     fullmove: s.turn === 'black' ? s.fullmove + 1 : s.fullmove,
   };
 }
 
-export type ApplyResult = { readonly ok: true; readonly state: GameState } | { readonly ok: false; readonly error: 'illegal' };
+export type ApplyResult =
+  | { readonly ok: true; readonly state: GameState; readonly effects: MoveEffects }
+  | { readonly ok: false; readonly error: 'illegal' };
 
-/** Applies a move only if it is legal in `s`. */
+/** Applies a move only if it is legal in `s`, and reports its side effects (capture, castle, promotion). */
 export function applyMove(s: GameState, m: Move): ApplyResult {
   const legal = legalMoves(s).some((x) => x.from === m.from && x.to === m.to && x.promotion === m.promotion);
-  return legal ? { ok: true, state: applyMoveUnchecked(s, m) } : { ok: false, error: 'illegal' };
+  if (!legal) return { ok: false, error: 'illegal' };
+  const effects = effectsOf(s, m);
+  return { ok: true, state: applyMoveUnchecked(s, m, effects), effects };
 }
 
 const PROMO_CHAR: Record<Promotion, string> = { queen: 'q', rook: 'r', bishop: 'b', knight: 'n' };

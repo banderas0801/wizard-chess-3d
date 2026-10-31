@@ -52,4 +52,15 @@ describe('position', () => {
     expect(toUci({ from: 'g1', to: 'f3' })).toBe('g1f3');
     expect(parseUci('z9a1')).toBeNull();
   });
+
+  it('reports move effects: en passant square, castling rook, promotion', () => {
+    const ep = applyMove(fromFen('4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 2'), parseUci('e5d6')!);
+    expect(ep.ok && ep.effects.capture).toMatchObject({ square: 'd5', enPassant: true, piece: { type: 'pawn', color: 'black' } });
+    const castle = applyMove(fromFen('r3k3/8/8/8/8/8/8/4K3 b q - 0 1'), parseUci('e8c8')!);
+    expect(castle.ok && castle.effects.castle).toMatchObject({ from: 'a8', to: 'd8', rook: { type: 'rook' } });
+    const promo = applyMove(fromFen('1n2k3/P7/8/8/8/8/8/4K3 w - - 0 1'), parseUci('a7b8n')!);
+    expect(promo.ok && promo.effects).toMatchObject({ promotion: 'knight', capture: { square: 'b8', enPassant: false } });
+    const quiet = applyMove(initialState(), parseUci('g1f3')!);
+    expect(quiet.ok && quiet.effects).toMatchObject({ capture: null, castle: null, promotion: null });
+  });
 });
