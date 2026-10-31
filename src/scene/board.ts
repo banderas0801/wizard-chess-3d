@@ -1,77 +1,63 @@
-import * as THREE from 'three';
+import {
+  BoxGeometry,
+  Color,
+  Group,
+  InstancedMesh,
+  Matrix4,
+  Mesh,
+  MeshStandardMaterial,
+  Vector3,
+} from 'three';
+import { indexToSquare, squareToIndex, type Square } from '../game';
 
-export interface Board3D {
-  group: THREE.Group;
-  getTileWorldPosition: (r: number, c: number) => THREE.Vector3;
-  tileSize: number;
+export const SQUARE_SIZE = 1;
+export const BOARD_TOP_Y = 0;
+const TILE_H = 0.12;
+
+/** World-space centre of a square's top face. White's a1 is at (-3.5, 0, 3.5). */
+export function squareToWorld(sq: Square, out = new Vector3()): Vector3 {
+  const { file, rank } = squareToIndex(sq);
+  return out.set((file - 3.5) * SQUARE_SIZE, BOARD_TOP_Y, (3.5 - rank) * SQUARE_SIZE);
 }
 
-/**
- * Xây dựng bàn cờ 8x8 với hình học hình khối chuẩn xác và vật liệu PBR tương phản
- */
-export function createChessBoard(): Board3D {
-  const group = new THREE.Group();
-  const tileSize = 1.2;
-  const tileHeight = 0.15;
+export function createBoard(): Group {
+  const group = new Group();
+  group.name = 'board';
 
-  // 1. Khung viền bàn cờ
-  const borderGeo = new THREE.BoxGeometry(tileSize * 8 + 0.8, 0.4, tileSize * 8 + 0.8);
-  const borderMat = new THREE.MeshStandardMaterial({
-    color: 0x0f141f,
-    roughness: 0.35,
-    metalness: 0.4
-  });
-  const border = new THREE.Mesh(borderGeo, borderMat);
-  border.position.y = 0.2;
-  border.receiveShadow = true;
-  group.add(border);
+  // Light squares: polished pale stone. Dark squares: glossy near-black volcanic glass.
+  const light = new MeshStandardMaterial({ color: new Color('#e9e4da'), roughness: 0.28, metalness: 0.0 });
+  const dark = new MeshStandardMaterial({ color: new Color('#16141a'), roughness: 0.12, metalness: 0.35 });
+  const tile = new BoxGeometry(SQUARE_SIZE, TILE_H, SQUARE_SIZE);
 
-  // 2. Viền kim loại mạ vàng
-  const goldTrimGeo = new THREE.BoxGeometry(tileSize * 8 + 0.95, 0.06, tileSize * 8 + 0.95);
-  const goldTrimMat = new THREE.MeshStandardMaterial({
-    color: 0xd4af37,
-    roughness: 0.2,
-    metalness: 0.85
-  });
-  const goldTrim = new THREE.Mesh(goldTrimGeo, goldTrimMat);
-  goldTrim.position.y = 0.42;
-  group.add(goldTrim);
-
-  // 3. 64 Ô cờ (White Marble vs Dark Obsidian)
-  const whiteTileMat = new THREE.MeshStandardMaterial({
-    color: 0xf1f5f9,
-    roughness: 0.15,
-    metalness: 0.1
-  });
-
-  const blackTileMat = new THREE.MeshStandardMaterial({
-    color: 0x0f172a,
-    roughness: 0.2,
-    metalness: 0.35
-  });
-
-  const tileGeo = new THREE.BoxGeometry(tileSize * 0.98, tileHeight, tileSize * 0.98);
-
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      const isWhite = (r + c) % 2 === 0;
-      const tile = new THREE.Mesh(tileGeo, isWhite ? whiteTileMat : blackTileMat);
-      const x = (c - 3.5) * tileSize;
-      const z = (r - 3.5) * tileSize;
-      tile.position.set(x, 0.46, z);
-      tile.receiveShadow = true;
-      tile.userData = { r, c, isTile: true };
-      group.add(tile);
+  const lights = new InstancedMesh(tile, light, 32);
+  const darks = new InstancedMesh(tile, dark, 32);
+  let li = 0;
+  let di = 0;
+  const m = new Matrix4();
+  const p = new Vector3();
+  for (let rank = 0; rank < 8; rank++) {
+    for (let file = 0; file < 8; file++) {
+      squareToWorld(indexToSquare(file, rank), p);
+      m.makeTranslation(p.x, BOARD_TOP_Y - TILE_H / 2, p.z);
+      // a1 is dark.
+      if ((file + rank) % 2 === 0) darks.setMatrixAt(di++, m);
+      else lights.setMatrixAt(li++, m);
     }
   }
-
-  function getTileWorldPosition(r: number, c: number): THREE.Vector3 {
-    return new THREE.Vector3((c - 3.5) * tileSize, 0.54, (r - 3.5) * tileSize);
+  for (const mesh of [lights, darks]) {
+    mesh.receiveShadow = true;
+    mesh.castShadow = false;
+    group.add(mesh);
   }
 
-  return {
-    group,
-    getTileWorldPosition,
-    tileSize
-  };
+  const frame = new Mesh(
+    new BoxGeometry(8 * SQUARE_SIZE + 0.8, 0.3, 8 * SQUARE_SIZE + 0.8),
+    new MeshStandardMaterial({ color: '#3b2a1e', roughness: 0.55, metalness: 0.05 }),
+  );
+  frame.position.y = BOARD_TOP_Y - TILE_H - 0.15 + 0.001;
+  frame.receiveShadow = true;
+  frame.castShadow = true;
+  group.add(frame);
+
+  return group;
 }

@@ -1,188 +1,148 @@
-import * as THREE from 'three';
+import {
+  CylinderGeometry,
+  Group,
+  LatheGeometry,
+  Mesh,
+  MeshStandardMaterial,
+  SphereGeometry,
+  BoxGeometry,
+  Vector2,
+  Vector3,
+  type BufferGeometry,
+  type Material,
+} from 'three';
+import type { Board, Color, PieceType } from '../game';
+import { squareToWorld } from './board';
 
-export type PieceType = 'pawn' | 'knight' | 'bishop' | 'rook' | 'queen' | 'king';
-export type PieceColor = 'w' | 'b';
+type Profile = readonly (readonly [radius: number, height: number])[];
 
-export interface Piece3D {
-  mesh: THREE.Group;
-  type: PieceType;
-  color: PieceColor;
-  gridPos: { r: number; c: number };
-  moveTo: (targetWorldPos: THREE.Vector3, renderer: THREE.WebGLRenderer, onComplete?: () => void) => void;
+// Half-profiles (radius, y) revolved around Y. Hand-authored, unit = one square.
+const BASE: Profile = [
+  [0, 0], [0.34, 0], [0.34, 0.06], [0.3, 0.09], [0.27, 0.12], [0.2, 0.16],
+];
+
+const PROFILES: Record<Exclude<PieceType, 'knight'>, Profile> = {
+  pawn: [...BASE, [0.13, 0.3], [0.1, 0.42], [0.16, 0.45], [0.1, 0.48], [0, 0.48]],
+  rook: [...BASE, [0.18, 0.5], [0.24, 0.54], [0.24, 0.72], [0.16, 0.72], [0.16, 0.66], [0, 0.66]],
+  bishop: [...BASE, [0.12, 0.45], [0.09, 0.55], [0.18, 0.58], [0.09, 0.61], [0.14, 0.72], [0.1, 0.84], [0.03, 0.9], [0, 0.92]],
+  queen: [...BASE, [0.13, 0.5], [0.1, 0.68], [0.2, 0.72], [0.12, 0.76], [0.22, 0.92], [0.12, 0.94], [0.06, 1.0], [0, 1.0]],
+  king: [...BASE, [0.14, 0.55], [0.11, 0.74], [0.21, 0.78], [0.13, 0.82], [0.19, 0.98], [0, 0.98]],
+};
+
+const LATHE_SEGMENTS = 40;
+
+function lathe(profile: Profile): BufferGeometry {
+  return new LatheGeometry(profile.map(([r, y]) => new Vector2(r, y)), LATHE_SEGMENTS);
 }
 
-/**
- * Quản lý khởi tạo quân cờ bằng hình học cơ bản có viền hào quang và cơ chế cập nhật bóng tối ưu
- */
-export class PieceManager {
-  private whiteMat: THREE.MeshStandardMaterial;
-  private blackMat: THREE.MeshStandardMaterial;
-  private goldMat: THREE.MeshStandardMaterial;
+function addPart(group: Group, geo: BufferGeometry, mat: Material, pos?: Vector3, rotZ = 0, rotY = 0): void {
+  const m = new Mesh(geo, mat);
+  if (pos) m.position.copy(pos);
+  m.rotation.set(0, rotY, rotZ);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  group.add(m);
+}
 
-  constructor() {
-    // 1. Bạch Ngọc: Trắng tinh khiết, bóng bẩy
-    this.whiteMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      roughness: 0.15,
-      metalness: 0.15,
-      emissive: 0xf59e0b,
-      emissiveIntensity: 0.15
-    });
-
-    // 2. Hắc Thạch: Đen tuyền Obsidian, rãnh ma thuật tím
-    this.blackMat = new THREE.MeshStandardMaterial({
-      color: 0x0a0e17,
-      roughness: 0.15,
-      metalness: 0.45,
-      emissive: 0xa855f7,
-      emissiveIntensity: 0.65
-    });
-
-    // 3. Viền mạ kim loại vàng
-    this.goldMat = new THREE.MeshStandardMaterial({
-      color: 0xd4af37,
-      roughness: 0.2,
-      metalness: 0.85
-    });
-  }
-
-  public createPiece(type: PieceType, color: PieceColor, r: number, c: number): Piece3D {
-    const group = new THREE.Group();
-    const mat = color === 'w' ? this.whiteMat : this.blackMat;
-
-    // Chân đế 2 tầng có viền kim loại
-    const baseGeo = new THREE.CylinderGeometry(0.42, 0.48, 0.14, 20);
-    const baseMesh = new THREE.Mesh(baseGeo, mat);
-    baseMesh.position.y = 0.07;
-    group.add(baseMesh);
-
-    const rimGeo = new THREE.CylinderGeometry(0.45, 0.5, 0.05, 20);
-    const rimMesh = new THREE.Mesh(rimGeo, this.goldMat);
-    rimMesh.position.y = 0.025;
-    group.add(rimMesh);
-
-    // Vòng hào quang ma thuật (Aura Ring) định vị trên sàn
-    const haloGeo = new THREE.RingGeometry(0.35, 0.46, 24);
-    haloGeo.rotateX(-Math.PI / 2);
-    const haloMat = new THREE.MeshBasicMaterial({
-      color: color === 'w' ? 0xf59e0b : 0xa855f7,
-      transparent: true,
-      opacity: 0.85,
-      side: THREE.DoubleSide
-    });
-    const halo = new THREE.Mesh(haloGeo, haloMat);
-    halo.position.y = 0.145;
-    group.add(halo);
-
-    // Dựng hình học thân và đầu theo loại quân
-    switch (type) {
-      case 'pawn': {
-        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.35, 0.65, 16), mat);
-        body.position.y = 0.45;
-        const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 16), mat);
-        head.position.y = 0.88;
-        group.add(body, head);
-        break;
-      }
-      case 'knight': {
-        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.38, 0.65, 16), mat);
-        body.position.y = 0.45;
-        const neck = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.45, 0.35), mat);
-        neck.position.set(0, 0.82, 0.08);
-        neck.rotation.x = -Math.PI / 8;
-        const head = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.32, 0.45), mat);
-        head.position.set(0, 1.05, 0.22);
-        group.add(body, neck, head);
-        break;
-      }
-      case 'bishop': {
-        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.36, 0.9, 16), mat);
-        body.position.y = 0.58;
-        const mitre = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.55, 12), mat);
-        mitre.position.y = 1.25;
-        const gem = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 12), this.goldMat);
-        gem.position.y = 1.55;
-        group.add(body, mitre, gem);
-        break;
-      }
-      case 'rook': {
-        const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.4, 0.85, 16), mat);
-        tower.position.y = 0.55;
-        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.3, 0.25, 16), mat);
-        cap.position.y = 1.08;
-        group.add(tower, cap);
-        break;
-      }
-      case 'queen': {
-        const gown = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.38, 1.1, 16), mat);
-        gown.position.y = 0.68;
-        const crown = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.38, 8), this.goldMat);
-        crown.position.y = 1.35;
-        crown.rotation.x = Math.PI;
-        const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.12, 0), this.goldMat);
-        gem.position.y = 1.58;
-        group.add(gown, crown, gem);
-        break;
-      }
-      case 'king': {
-        const mantle = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.42, 1.2, 16), mat);
-        mantle.position.y = 0.72;
-        const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.25, 0.35, 16), mat);
-        crown.position.y = 1.45;
-        const cross = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.32, 0.08), this.goldMat);
-        cross.position.y = 1.75;
-        group.add(mantle, crown, cross);
-        break;
-      }
+function buildPiece(type: PieceType, color: Color, mat: Material): Group {
+  const g = new Group();
+  const facing = color === 'white' ? 0 : Math.PI;
+  switch (type) {
+    case 'knight': {
+      addPart(g, lathe([...BASE, [0.17, 0.3], [0.17, 0.34], [0, 0.34]]), mat);
+      // Blocky stylised head: neck + muzzle, turned to face the opponent.
+      const head = new Group();
+      addPart(head, new BoxGeometry(0.2, 0.42, 0.26), mat, new Vector3(0, 0.52, 0.02), 0);
+      addPart(head, new BoxGeometry(0.18, 0.16, 0.3), mat, new Vector3(0, 0.66, -0.13), 0);
+      addPart(head, new BoxGeometry(0.05, 0.1, 0.05), mat, new Vector3(0.06, 0.78, 0.06));
+      addPart(head, new BoxGeometry(0.05, 0.1, 0.05), mat, new Vector3(-0.06, 0.78, 0.06));
+      head.rotation.y = facing;
+      g.add(head);
+      break;
     }
-
-    // Đổ bóng & nhận bóng
-    group.traverse(child => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
+    case 'king': {
+      addPart(g, lathe(PROFILES.king), mat);
+      addPart(g, new BoxGeometry(0.05, 0.2, 0.05), mat, new Vector3(0, 1.07, 0));
+      addPart(g, new BoxGeometry(0.15, 0.05, 0.05), mat, new Vector3(0, 1.1, 0));
+      break;
+    }
+    case 'queen': {
+      addPart(g, lathe(PROFILES.queen), mat);
+      addPart(g, new SphereGeometry(0.045, 16, 12), mat, new Vector3(0, 1.03, 0));
+      break;
+    }
+    case 'rook': {
+      addPart(g, lathe(PROFILES.rook), mat);
+      // Crenellations.
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+        addPart(g, new CylinderGeometry(0.05, 0.05, 0.08, 8), mat, new Vector3(Math.cos(a) * 0.2, 0.76, Math.sin(a) * 0.2));
       }
-    });
-
-    const piece: Piece3D = {
-      mesh: group,
-      type,
-      color,
-      gridPos: { r, c },
-      moveTo: (targetWorldPos: THREE.Vector3, renderer: THREE.WebGLRenderer, onComplete?: () => void) => {
-        // TỐI ƯU CỐT LÕI: shadowMap.needsUpdate = true CHỈ KHI QUÂN DI CHUYỂN
-        renderer.shadowMap.needsUpdate = true;
-
-        const startPos = group.position.clone();
-        const startTime = performance.now();
-        const duration = 280; // 280ms
-
-        function animate(now: number) {
-          const elapsed = now - startTime;
-          const progress = Math.min(1, elapsed / duration);
-          const easeOut = 1 - Math.pow(1 - progress, 3);
-
-          group.position.lerpVectors(startPos, targetWorldPos, easeOut);
-          // Nâng nhẹ lên khỏi mặt sàn khi di chuyển
-          group.position.y = targetWorldPos.y + Math.sin(progress * Math.PI) * 0.25;
-
-          // Trong suốt quá trình di chuyển, cập nhật bóng đổ
-          renderer.shadowMap.needsUpdate = true;
-
-          if (progress < 1) {
-            requestAnimationFrame(animate);
-          } else {
-            group.position.copy(targetWorldPos);
-            // Một frame cuối để cố định bóng đổ tĩnh
-            renderer.shadowMap.needsUpdate = true;
-            if (onComplete) onComplete();
-          }
-        }
-
-        requestAnimationFrame(animate);
-      }
-    };
-
-    return piece;
+      break;
+    }
+    default:
+      addPart(g, lathe(PROFILES[type]), mat);
   }
+  return g;
+}
+
+export interface PieceLayer {
+  readonly group: Group;
+  /** Reconcile meshes to the board. Returns true if any piece moved, appeared or disappeared. */
+  sync(board: Board): boolean;
+}
+
+export function createPieces(): PieceLayer {
+  const group = new Group();
+  group.name = 'pieces';
+  const materials: Record<Color, MeshStandardMaterial> = {
+    white: new MeshStandardMaterial({ color: '#f1ece2', roughness: 0.35, metalness: 0.0 }),
+    black: new MeshStandardMaterial({ color: '#1d1b22', roughness: 0.25, metalness: 0.2 }),
+  };
+  const meshes = new Map<string, Group>();
+  const tmp = new Vector3();
+
+  return {
+    group,
+    sync(board) {
+      let changed = false;
+      const alive = new Set<string>();
+      for (const [sq, piece] of board) {
+        alive.add(piece.id);
+        let obj = meshes.get(piece.id);
+        if (obj && obj.userData.type !== piece.type) {
+          // Promotion: same id, new shape.
+          group.remove(obj);
+          obj.traverse((o) => {
+            if (o instanceof Mesh) o.geometry.dispose();
+          });
+          meshes.delete(piece.id);
+          obj = undefined;
+        }
+        if (!obj) {
+          obj = buildPiece(piece.type, piece.color, materials[piece.color]);
+          obj.name = piece.id;
+          obj.userData.type = piece.type;
+          meshes.set(piece.id, obj);
+          group.add(obj);
+          changed = true;
+        }
+        squareToWorld(sq, tmp);
+        if (!obj.position.equals(tmp)) {
+          obj.position.copy(tmp);
+          changed = true;
+        }
+      }
+      for (const [id, obj] of meshes) {
+        if (alive.has(id)) continue;
+        group.remove(obj);
+        obj.traverse((o) => {
+          if (o instanceof Mesh) o.geometry.dispose();
+        });
+        meshes.delete(id);
+        changed = true;
+      }
+      return changed;
+    },
+  };
 }

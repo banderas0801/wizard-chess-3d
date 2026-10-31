@@ -1,182 +1,182 @@
-import * as THREE from 'three';
+import { DirectionalLight, PerspectiveCamera, Scene, Timer } from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { createRenderer } from './render/renderer';
 import { loadEnvironment } from './render/env';
-import { createPost, QualityTier } from './render/post';
-import { createQualityGovernor } from './render/quality';
-import { createChessBoard } from './scene/board';
-import { PieceManager, Piece3D } from './scene/pieces';
-import { createInitialGameState, getLegalMoves, Square } from './game';
+import { createPost } from './render/post';
+import { createQualityGovernor, parseTier } from './render/quality';
+import { createBoard } from './scene/board';
+import { createPieces } from './scene/pieces';
+import { applyMove, initialState, legalMoves, outcome, parseUci, toFen, type GameState } from './game';
+import { createAiController } from './ai/controller';
+import { createWorkerPort } from './ai/workerPort';
 
-const container = document.getElementById('canvas-container')!;
-const tierBadge = document.getElementById('tier-badge')!;
+const HDRI_URL = `${import.meta.env.BASE_URL}hdri/studio_small_08_1k.hdr`;
+const BUDGET_MS = 1000 / 60;
+const AI_COLOR = 'black';
 
-// 1. Scene & Camera
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x07090e);
-scene.fog = new THREE.FogExp2(0x07090e, 0.02);
+async function main(): Promise<void> {
+  const hud = document.getElementById('hud')!;
+  const { renderer, markShadowsDirty, shadowUpdates } = createRenderer(document.body);
 
-const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 80);
-camera.position.set(0, 13, 14);
-camera.lookAt(0, 0, 0);
+  const scene = new Scene();
+  const camera = new PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
+  camera.position.set(0, 9.5, 10.5);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.target.set(0, 0, 0);
+  controls.enableDamping = true;
+  controls.maxPolarAngle = Math.PI * 0.47;
 
-// 2. Renderer
-const renderer = createRenderer({ container });
+  const env = await loadEnvironment(renderer, HDRI_URL);
+  scene.environment = env;
+  scene.environmentIntensity = 0.55; // let the key light's shadows read against the soft studio fill
+  scene.background = env;
+  scene.backgroundBlurriness = 0.6;
+  scene.backgroundIntensity = 0.35;
 
-// 3. Environment & Lighting
-const sunLight = new THREE.DirectionalLight(0xfff0ba, 2.2);
-sunLight.position.set(4, 12, 5);
-sunLight.castShadow = true;
-sunLight.shadow.mapSize.set(1024, 1024);
-sunLight.shadow.camera.near = 1.0;
-sunLight.shadow.camera.far = 28.0;
-sunLight.shadow.camera.left = -6;
-sunLight.shadow.camera.right = 6;
-sunLight.shadow.camera.top = 6;
-sunLight.shadow.camera.bottom = -6;
-sunLight.shadow.bias = -0.0005;
-scene.add(sunLight);
+  const sun = new DirectionalLight('#fff4e6', 2.2);
+  sun.position.set(5, 10, 4);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -6;
+  sun.shadow.camera.right = 6;
+  sun.shadow.camera.top = 6;
+  sun.shadow.camera.bottom = -6;
+  sun.shadow.camera.near = 1;
+  sun.shadow.camera.far = 30;
+  sun.shadow.bias = -0.0005;
+  sun.shadow.normalBias = 0.02;
+  sun.shadow.radius = 3; // PCF blur (PCFSoftShadowMap was removed in three r18x)
+  scene.add(sun);
 
-const ambientLight = new THREE.AmbientLight(0x1e293b, 0.8);
-scene.add(ambientLight);
+  scene.add(createBoard());
+  const pieces = createPieces();
+  scene.add(pieces.group);
 
-// Nạp HDRI CC0 Poly Haven (chạy 1 lần duy nhất lúc khởi động)
-loadEnvironment(renderer, '/hdri/cathedral_atrium_1k.hdr').then(({ envMap }) => {
-  scene.environment = envMap;
-  renderer.shadowMap.needsUpdate = true;
-});
+  // ---- game + AI -----------------------------------------------------------
+  let game: GameState = initialState();
+  const history: GameState[] = [];
+  let lastEval: number | null = null;
+  let lastError = '';
+  pieces.sync(game.board);
+  markShadowsDirty('init');
 
-// 4. Bàn cờ & Quân cờ
-const board = createChessBoard();
-scene.add(board.group);
+  const show = (): void => {
+    if (pieces.sync(game.board)) markShadowsDirty('piece-move');
+  };
 
-const pieceManager = new PieceManager();
-const gameState = createInitialGameState();
-const piecesMap = new Map<string, Piece3D>();
+  const port = createWorkerPort();
+  const ai = createAiController(port, {
+    applyMove(uci, evalCp) {
+      const m = parseUci(uci);
+      const r = m ? applyMove(game, m) : null;
+      if (!r || !r.ok) return { ok: false, message: `engine returned illegal move ${uci}` };
+      history.push(game);
+      game = r.state;
+      lastEval = evalCp;
+      show();
+      return { ok: true };
+    },
+    showError(message) {
+      lastError = message;
+    },
+  });
 
-for (let r = 0; r < 8; r++) {
-  for (let c = 0; c < 8; c++) {
-    const p = gameState.board[r]![c];
-    if (p) {
-      const piece3D = pieceManager.createPiece(p.type, p.color, r, c);
-      const worldPos = board.getTileWorldPosition(r, c);
-      piece3D.mesh.position.copy(worldPos);
-      scene.add(piece3D.mesh);
-      piecesMap.set(`${r},${c}`, piece3D);
+  const maybeAskAi = (): void => {
+    if (game.turn === AI_COLOR && !outcome(game)) ai.requestMove(toFen(game), { timeMs: 300 });
+  };
+
+  /** Placeholder human input until square picking lands: play a random legal move for white. */
+  const humanMove = (): void => {
+    if (game.turn === AI_COLOR || outcome(game)) return;
+    if (!ai.userMove()) return; // input locked while the AI is thinking
+    const moves = legalMoves(game);
+    const m = moves[Math.floor(Math.random() * moves.length)];
+    if (!m) return;
+    const r = applyMove(game, m);
+    if (!r.ok) return;
+    history.push(game);
+    game = r.state;
+    lastError = '';
+    show();
+    maybeAskAi();
+  };
+
+  const undo = (): void => {
+    ai.undo(); // cancels any in-flight search and bumps requestId
+    // Undo back to the human's turn.
+    do game = history.pop() ?? game;
+    while (game.turn === AI_COLOR && history.length > 0);
+    show();
+  };
+
+  const reset = (): void => {
+    ai.reset();
+    history.length = 0;
+    game = initialState();
+    lastEval = null;
+    lastError = '';
+    show();
+  };
+
+  let downAt: { x: number; y: number } | null = null;
+  renderer.domElement.addEventListener('pointerdown', (e) => (downAt = { x: e.clientX, y: e.clientY }));
+  renderer.domElement.addEventListener('pointerup', (e) => {
+    // Treat as a click only if the pointer barely moved (so orbiting doesn't trigger moves).
+    if (downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) < 5) humanMove();
+    downAt = null;
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === ' ' || e.key === 'm' || e.key === 'Enter') humanMove();
+    else if (e.key === 'u') undo();
+    else if (e.key === 'r') reset();
+  });
+
+  // ---- quality + render loop -------------------------------------------------
+  const params = new URLSearchParams(location.search);
+  const forced = parseTier(params.get('tier'));
+  const post = createPost(renderer, scene, camera, forced ?? 'high');
+  const governor = forced ? null : createQualityGovernor({ budgetMs: BUDGET_MS });
+
+  window.addEventListener('resize', () => {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+    post.resize(w, h);
+  });
+
+  const timer = new Timer();
+  timer.connect(document);
+  let hudAcc = 0;
+  const frame = (ts: number): void => {
+    timer.update(ts);
+    const dt = timer.getDelta();
+    controls.update();
+    if (governor) {
+      const next = governor.sample(dt * 1000);
+      if (next) post.setTier(next);
     }
-  }
-}
-
-// 5. Post-Processing Pipeline & Quality Governor
-const post = createPost(renderer, scene, camera);
-const governor = createQualityGovernor({ budgetMs: 16.67, initialTier: post.getTier() });
-
-function updateTierUI(tier: QualityTier) {
-  tierBadge.textContent = tier.toUpperCase();
-  tierBadge.style.color = tier === 'high' ? '#34d399' : tier === 'low' ? '#f59e0b' : '#94a3b8';
-}
-updateTierUI(post.getTier());
-
-// 6. Tương tác click chọn quân & di chuyển
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
-let selectedSquare: Square | null = null;
-
-window.addEventListener('click', (event) => {
-  const rect = renderer.domElement.getBoundingClientRect();
-  mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-  mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-  raycaster.setFromCamera(mouse, camera);
-  const intersects = raycaster.intersectObjects(scene.children, true);
-  if (intersects.length === 0) return;
-
-  for (const hit of intersects) {
-    let obj: THREE.Object3D | null = hit.object;
-    while (obj && obj !== scene) {
-      if (obj.userData?.['isTile']) {
-        const r = obj.userData['r'] as number;
-        const c = obj.userData['c'] as number;
-        handleTileClick(r, c);
-        return;
-      }
-      obj = obj.parent;
+    post.render(dt);
+    hudAcc += dt;
+    if (hudAcc > 0.25) {
+      hudAcc = 0;
+      const end = outcome(game);
+      hud.textContent =
+        `tier: ${post.tier}${forced ? ' (forced)' : ''} · ${(dt * 1000).toFixed(1)} ms · ` +
+        `shadow updates: init ${shadowUpdates.init}, moves ${shadowUpdates['piece-move']} · ` +
+        `AI: ${ai.machine.phase.tag} #${ai.machine.currentRequestId}` +
+        (lastEval !== null ? ` eval ${lastEval}cp` : '') +
+        (lastError ? ` · error: ${lastError}` : '') +
+        (end ? ` · ${end}` : '') +
+        ` · ${game.turn} to move · click/space = move, u = undo, r = reset`;
     }
-  }
-});
-
-function handleTileClick(r: number, c: number) {
-  if (selectedSquare) {
-    const legalMoves = getLegalMoves(gameState, selectedSquare);
-    const isMove = legalMoves.some(m => m.r === r && m.c === c);
-
-    if (isMove) {
-      const fromKey = `${selectedSquare.r},${selectedSquare.c}`;
-      const toKey = `${r},${c}`;
-      const movingPiece = piecesMap.get(fromKey);
-
-      if (movingPiece) {
-        // Nếu có quân bị ăn -> xóa mesh
-        const capturedPiece = piecesMap.get(toKey);
-        if (capturedPiece) {
-          scene.remove(capturedPiece.mesh);
-          piecesMap.delete(toKey);
-        }
-
-        piecesMap.delete(fromKey);
-        piecesMap.set(toKey, movingPiece);
-
-        // Cập nhật logic state
-        gameState.board[r]![c] = gameState.board[selectedSquare.r]![selectedSquare.c];
-        gameState.board[selectedSquare.r]![selectedSquare.c] = null;
-        gameState.turn = gameState.turn === 'w' ? 'b' : 'w';
-
-        // Di chuyển 3D mượt mà kèm shadow.needsUpdate = true
-        const targetPos = board.getTileWorldPosition(r, c);
-        movingPiece.moveTo(targetPos, renderer);
-      }
-
-      selectedSquare = null;
-      return;
-    }
-  }
-
-  const p = gameState.board[r]?.[c];
-  if (p && p.color === gameState.turn) {
-    selectedSquare = { r, c };
-  } else {
-    selectedSquare = null;
-  }
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
 }
 
-// 7. Vòng lặp requestAnimationFrame với Quality Governor
-let lastTime = performance.now();
-
-function animate(currentTime: number) {
-  requestAnimationFrame(animate);
-
-  const deltaMs = currentTime - lastTime;
-  lastTime = currentTime;
-
-  // Điều tiết chất lượng dựa trên frame time
-  const newTier = governor.sample(deltaMs);
-  if (newTier) {
-    post.setTier(newTier);
-    updateTierUI(newTier);
-  }
-
-  // Render qua Pipeline
-  post.render(deltaMs / 1000);
-}
-
-requestAnimationFrame(animate);
-
-// 8. Resize Handler
-window.addEventListener('resize', () => {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-  renderer.setSize(w, h);
-  post.resize(w, h);
-  renderer.shadowMap.needsUpdate = true;
+main().catch((err: unknown) => {
+  console.error(err);
+  document.body.insertAdjacentHTML('beforeend', `<pre style="color:#f88">${String(err)}</pre>`);
 });
