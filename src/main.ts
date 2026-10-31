@@ -1,14 +1,19 @@
-import { Color, DirectionalLight, Fog, HemisphereLight, PerspectiveCamera, Scene, Timer } from 'three';
+import { Color, DirectionalLight, Fog, HemisphereLight, PerspectiveCamera, Scene, Timer, Vector3 } from 'three';
 import { createCameraRig, type Preset } from './render/camera';
 import { createRenderer } from './render/renderer';
 import { loadEnvironment } from './render/env';
 import { createPost } from './render/post';
-import { createQualityGovernor, parseTier } from './render/quality';
-import { createBoard } from './scene/board';
+import { createQualityGovernor, parseTier, type QualityTier } from './render/quality';
+import { createProceduralAnimator } from './scene/anim';
+import { createChoreographer } from './scene/choreo';
+import { createStrikeFx, SHAKE_SCALE } from './scene/fx';
+import { planMove } from './scene/plan';
+import { createAnimatorStage } from './scene/stage';
+import { createBoard, squareToWorld } from './scene/board';
 import { createHall, hallColliders } from './scene/hall';
 import { detailForTier } from './scene/materials';
 import { createPieces } from './scene/pieces';
-import { applyMove, initialState, legalMoves, outcome, parseUci, toFen, type GameState } from './game';
+import { fromFen, initialState, legalMoves, outcome, parseUci, toFen, type GameState, type Move, type Square } from './game';
 import { createAiController } from './ai/controller';
 import { createWorkerPort } from './ai/workerPort';
 
@@ -63,28 +68,86 @@ async function main(): Promise<void> {
   const pieces = createPieces(detail);
   scene.add(pieces.group);
 
-  // ---- game + AI -----------------------------------------------------------
-  let game: GameState = initialState();
+  // ---- game + AI + choreography ---------------------------------------------
+  // `?fen=...&play=uci` starts from a position and plays one move (demo/screenshots);
+  // `&pause=phase:seconds` freezes animation time that long into that phase.
+  let game: GameState = (() => {
+    const f = params.get('fen');
+    try {
+      return f ? fromFen(f) : initialState();
+    } catch {
+      return initialState();
+    }
+  })();
   const history: GameState[] = [];
   let lastEval: number | null = null;
   let lastError = '';
+  let tier: QualityTier = startTier;
+  const toggles = { shake: true, closeUp: true };
+  const FRAGMENTS: Record<QualityTier, number> = { high: 18, low: 10, off: 5 };
+
+  const animator = createProceduralAnimator({ fragments: FRAGMENTS[startTier] });
+  animator.idleSway = startTier !== 'off';
+  const fx = createStrikeFx();
+  scene.add(fx.group);
+  const idleAll = (): void => {
+    for (const obj of pieces.group.children) animator.play(obj, 'idle');
+  };
   pieces.sync(game.board);
+  idleAll();
   markShadowsDirty('init');
 
   const show = (): void => {
     if (pieces.sync(game.board)) markShadowsDirty('piece-move');
+    idleAll();
   };
+  const world = (sq: Square): Vector3 => squareToWorld(sq, new Vector3());
+
+  const stage = createAnimatorStage({ animator, get: (id) => pieces.get(id), fx });
+
+  let phaseTime = 0;
+  let timeScale = 1;
+  const pauseSpec = params.get('pause')?.split(':');
+  const fixedDt = Number(params.get('fixedDt') ?? 0); // deterministic stepping for slow headless captures
+
+  const choreo = createChoreographer<GameState>({
+    stage,
+    commit(next) {
+      // The one place a move changes the game state.
+      history.push(game);
+      game = next;
+      lastError = '';
+      show();
+    },
+    toggles: () => ({ shake: toggles.shake && tier !== 'off', closeUp: toggles.closeUp && tier !== 'off' }),
+    effect(cue, moverId, at) {
+      if (cue.kind === 'shake') {
+        const k = SHAKE_SCALE[tier];
+        if (k > 0) rig.shake(0.16 * cue.strength * k);
+        return;
+      }
+      const from = pieces.get(moverId)?.position.clone() ?? world(at);
+      fx.play(cue.kind, from, world(at), cue.strength, tier);
+    },
+    closeUp: (sq) => void rig.focus(world(sq)),
+    closeUpEnd: () => void rig.unfocus(),
+    onPhase(next) {
+      phaseTime = 0;
+      if (pauseSpec && next === pauseSpec[0] && Number(pauseSpec[1]) === 0) timeScale = 0;
+    },
+    onIdle(reason) {
+      if (reason === 'settled') maybeAskAi();
+    },
+  });
 
   const port = createWorkerPort();
   const ai = createAiController(port, {
     applyMove(uci, evalCp) {
       const m = parseUci(uci);
-      const r = m ? applyMove(game, m) : null;
-      if (!r || !r.ok) return { ok: false, message: `engine returned illegal move ${uci}` };
-      history.push(game);
-      game = r.state;
+      const plan = m ? planMove(game, m) : null;
+      if (!plan) return { ok: false, message: `engine returned illegal move ${uci}` };
+      if (!choreo.begin(plan)) return { ok: false, message: 'board busy' };
       lastEval = evalCp;
-      show();
       return { ok: true };
     },
     showError(message) {
@@ -92,42 +155,57 @@ async function main(): Promise<void> {
     },
   });
 
-  const maybeAskAi = (): void => {
+  function maybeAskAi(): void {
     if (game.turn === AI_COLOR && !outcome(game)) ai.requestMove(toFen(game), { timeMs: 300 });
+  }
+
+  const startMove = (m: Move): boolean => {
+    const plan = planMove(game, m);
+    if (!plan || !choreo.begin(plan)) return false;
+    return true;
   };
 
   /** Placeholder human input until square picking lands: play a random legal move for white. */
   const humanMove = (): void => {
+    if (choreo.inputLocked) return; // only NEW move selection is locked while pieces move
     if (game.turn === AI_COLOR || outcome(game)) return;
     if (!ai.userMove()) return; // input locked while the AI is thinking
     const moves = legalMoves(game);
     const m = moves[Math.floor(Math.random() * moves.length)];
-    if (!m) return;
-    const r = applyMove(game, m);
-    if (!r.ok) return;
-    history.push(game);
-    game = r.state;
-    lastError = '';
-    show();
-    maybeAskAi();
+    if (m) startMove(m);
   };
 
+  /** Never locked: cancel any animation (state untouched), then roll history back separately. */
   const undo = (): void => {
+    choreo.cancel();
     ai.undo(); // cancels any in-flight search and bumps requestId
     // Undo back to the human's turn.
     do game = history.pop() ?? game;
     while (game.turn === AI_COLOR && history.length > 0);
+    animator.release();
+    void rig.unfocus();
     show();
   };
 
   const reset = (): void => {
+    choreo.cancel();
     ai.reset();
     history.length = 0;
     game = initialState();
     lastEval = null;
     lastError = '';
+    animator.release();
     show();
   };
+
+  const demoMove = params.get('play');
+  if (demoMove) {
+    const m = parseUci(demoMove);
+    setTimeout(() => {
+      if (m && startMove(m)) return;
+      lastError = `demo move ${demoMove} not legal here`;
+    }, Number(params.get('delay') ?? 1500));
+  }
 
   let downAt: { x: number; y: number } | null = null;
   renderer.domElement.addEventListener('pointerdown', (e) => (downAt = { x: e.clientX, y: e.clientY }));
@@ -140,6 +218,8 @@ async function main(): Promise<void> {
     if (e.key === ' ' || e.key === 'm' || e.key === 'Enter') humanMove();
     else if (e.key === 'u') undo();
     else if (e.key === 'r') reset();
+    else if (e.key === 's') toggles.shake = !toggles.shake;
+    else if (e.key === 'c') toggles.closeUp = !toggles.closeUp;
     else if (PRESET_KEYS[e.key]) void rig.flyTo(PRESET_KEYS[e.key]!, 900);
   });
 
@@ -161,18 +241,31 @@ async function main(): Promise<void> {
   let hudAcc = 0;
   const frame = (ts: number): void => {
     timer.update(ts);
-    const dt = timer.getDelta();
+    const dt = fixedDt > 0 ? fixedDt : timer.getDelta();
+    phaseTime += dt * timeScale;
+    if (pauseSpec && choreo.phase === pauseSpec[0] && phaseTime >= Number(pauseSpec[1])) timeScale = 0;
+    const adt = dt * timeScale;
+    choreo.tick(adt);
+    animator.update(adt);
+    fx.update(adt);
+    // Shadows follow moving pieces every frame, and stop again once everything is still.
+    if (choreo.animating || animator.moving) markShadowsDirty('piece-move');
     rig.update(dt);
     if (governor) {
       const next = governor.sample(dt * 1000);
       if (next) {
         post.setTier(next);
-        const d = detailForTier(next);
-        if (d !== detail) {
-          detail = d;
-          board.setDetail(d);
-          pieces.setDetail(d); // same silhouettes and positions, so the cached shadow map stays valid
-        }
+        tier = next;
+        animator.idleSway = next !== 'off';
+        animator.fragments = FRAGMENTS[next];
+      }
+      const d = detailForTier(tier);
+      // Swapping piece meshes mid-animation would orphan the animator's targets: wait for idle.
+      if (d !== detail && choreo.phase === 'idle') {
+        detail = d;
+        board.setDetail(d);
+        pieces.setDetail(d); // same silhouettes and positions, so the cached shadow map stays valid
+        idleAll();
       }
     }
     post.render(dt);
@@ -183,11 +276,11 @@ async function main(): Promise<void> {
       hud.textContent =
         `tier: ${post.tier}${forced ? ' (forced)' : ''} · ${(dt * 1000).toFixed(1)} ms · ` +
         `shadow updates: init ${shadowUpdates.init}, moves ${shadowUpdates['piece-move']} · ` +
-        `AI: ${ai.machine.phase.tag} #${ai.machine.currentRequestId}` +
+        `AI: ${ai.machine.phase.tag} #${ai.machine.currentRequestId} · anim: ${choreo.phase}` +
         (lastEval !== null ? ` eval ${lastEval}cp` : '') +
         (lastError ? ` · error: ${lastError}` : '') +
         (end ? ` · ${end}` : '') +
-        ` · ${game.turn} to move · click/space = move, u = undo, r = reset, 1-4 = camera`;
+        ` · ${game.turn} to move · click/space = move, u = undo, r = reset, 1-4 = camera, s/c = shake ${toggles.shake ? 'on' : 'off'}/close-up ${toggles.closeUp ? 'on' : 'off'}`;
     }
     requestAnimationFrame(frame);
   };
