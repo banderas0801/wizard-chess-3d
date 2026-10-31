@@ -6,6 +6,16 @@
 //   approach | strike | shatter --cancel()--> cancelled --> idle   (never via settle; FEN untouched)
 //   settle | kingFall --cancel()--> idle                          (already committed; animation stops, state kept)
 //
+// Cancel rules:
+// - Before settle (approach | strike | shatter) the move is not in the state yet: cancel goes through
+//   `cancelled`, the stage clears debris and fx, restores the victim and sends attacker (and rook) home.
+// - In settle | kingFall the move is already committed: cancel only stops the animation and returns
+//   to idle; there is no `cancelled` phase and no second commit. Taking the move back is the app's
+//   history undo (pop the previous GameState), never the choreographer.
+// - The capture close-up belongs to the move: it ends (closeUpEnd, camera flies back to its pre-zoom
+//   pose) on entering settle or on cancel, at most once per close-up. Cancel returns synchronously and
+//   never waits for the camera, so undo is never locked.
+//
 // Invariants: host.commit() runs exactly once per completed move, on entering settle; the stage
 // only moves meshes; begin() is refused unless idle, cancel() is always accepted. Special-move
 // data (capture square, castling rook, promotion) arrives in the plan from the engine.
