@@ -2,3 +2,7 @@ node_modules
 dist
 smoke.png
 *.log
+.env*
+*.bat
+cookie.txt
+scratch/
