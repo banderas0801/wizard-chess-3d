@@ -1,87 +1,253 @@
 import {
-  CylinderGeometry,
+  ConeGeometry,
+  ExtrudeGeometry,
   Group,
   LatheGeometry,
+  Matrix4,
   Mesh,
-  MeshStandardMaterial,
+  Quaternion,
+  Shape,
   SphereGeometry,
-  BoxGeometry,
+  TorusGeometry,
   Vector2,
   Vector3,
+  Euler,
   type BufferGeometry,
-  type Material,
 } from 'three';
 import type { Board, Color, PieceType } from '../game';
 import { squareToWorld } from './board';
+import { getMaterials, type Detail } from './materials';
+import { Profile } from './profile';
 
-type Profile = readonly (readonly [radius: number, height: number])[];
+/** Where a part's material comes from: the piece's own colour or gold trim. */
+type Finish = 'body' | 'gold';
+interface Part {
+  readonly geo: BufferGeometry;
+  readonly finish: Finish;
+  readonly matrix?: Matrix4;
+}
 
-// Half-profiles (radius, y) revolved around Y. Hand-authored, unit = one square.
-const BASE: Profile = [
-  [0, 0], [0.34, 0], [0.34, 0.06], [0.3, 0.09], [0.27, 0.12], [0.2, 0.16],
-];
-
-const PROFILES: Record<Exclude<PieceType, 'knight'>, Profile> = {
-  pawn: [...BASE, [0.13, 0.3], [0.1, 0.42], [0.16, 0.45], [0.1, 0.48], [0, 0.48]],
-  rook: [...BASE, [0.18, 0.5], [0.24, 0.54], [0.24, 0.72], [0.16, 0.72], [0.16, 0.66], [0, 0.66]],
-  bishop: [...BASE, [0.12, 0.45], [0.09, 0.55], [0.18, 0.58], [0.09, 0.61], [0.14, 0.72], [0.1, 0.84], [0.03, 0.9], [0, 0.92]],
-  queen: [...BASE, [0.13, 0.5], [0.1, 0.68], [0.2, 0.72], [0.12, 0.76], [0.22, 0.92], [0.12, 0.94], [0.06, 1.0], [0, 1.0]],
-  king: [...BASE, [0.14, 0.55], [0.11, 0.74], [0.21, 0.78], [0.13, 0.82], [0.19, 0.98], [0, 0.98]],
+interface Res {
+  readonly lathe: number; // radial segments
+  readonly curve: number; // extrude curve segments
+  readonly torus: number;
+  readonly sphere: number;
+}
+const RES: Record<Detail, Res> = {
+  high: { lathe: 96, curve: 28, torus: 72, sphere: 24 },
+  low: { lathe: 28, curve: 10, torus: 24, sphere: 10 },
 };
 
-const LATHE_SEGMENTS = 40;
+const HALF_PI = Math.PI / 2;
+const at = (x: number, y: number, z: number, rx = 0, ry = 0, rz = 0, s = 1): Matrix4 =>
+  new Matrix4().compose(new Vector3(x, y, z), new Quaternion().setFromEuler(new Euler(rx, ry, rz)), new Vector3(s, s, s));
 
-function lathe(profile: Profile): BufferGeometry {
-  return new LatheGeometry(profile.map(([r, y]) => new Vector2(r, y)), LATHE_SEGMENTS);
+function lathe(p: Profile, r: Res): BufferGeometry {
+  return new LatheGeometry(p.points, r.lathe);
+}
+/** Gold ring lying flat at height y. */
+function ring(radius: number, y: number, tube: number, r: Res): Part {
+  return { geo: new TorusGeometry(radius, tube, 12, r.torus), finish: 'gold', matrix: at(0, y, 0, HALF_PI) };
+}
+/** Gold sheath over the foot bead produced by Profile.foot(R, h, ...). */
+const footRing = (R: number, h: number, r: Res): Part => ring(R * 0.8, h * 0.72, h * 0.105, r);
+const ball = (radius: number, y: number, r: Res, x = 0, z = 0): Part => ({
+  geo: new SphereGeometry(radius, r.sphere, Math.ceil(r.sphere * 0.75)),
+  finish: 'gold',
+  matrix: at(x, y, z),
+});
+/** Collar: a thin disc with a rounded edge, sheathed in gold. */
+function collar(p: Profile, inR: number, outR: number, y: number, outR2 = inR + 0.015): Profile {
+  return p.to(inR, y).corner().to(outR, y + 0.005).arc(outR, y + 0.02, 0.015, -HALF_PI, HALF_PI, 6).corner().to(outR2, y + 0.035).corner();
 }
 
-function addPart(group: Group, geo: BufferGeometry, mat: Material, pos?: Vector3, rotZ = 0, rotY = 0): void {
-  const m = new Mesh(geo, mat);
-  if (pos) m.position.copy(pos);
-  m.rotation.set(0, rotY, rotZ);
-  m.castShadow = true;
-  m.receiveShadow = true;
-  group.add(m);
+function pawn(r: Res): Part[] {
+  const p = new Profile().foot(0.27, 0.14, 0.17).curve([[0.12, 0.24], [0.085, 0.33]]);
+  collar(p, 0.085, 0.155, 0.345, 0.08);
+  p.to(0.08, 0.41).arc(0, 0.47, 0.1, -Math.asin(0.6), HALF_PI, 18);
+  return [{ geo: lathe(p, r), finish: 'body' }, footRing(0.27, 0.14, r), ring(0.157, 0.365, 0.014, r)];
 }
 
-function buildPiece(type: PieceType, color: Color, mat: Material): Group {
+function rook(r: Res): Part[] {
+  const p = new Profile()
+    .foot(0.3, 0.15, 0.21)
+    .curve([[0.19, 0.3], [0.178, 0.46], [0.185, 0.6]])
+    .curve([[0.22, 0.67], [0.25, 0.71]], 8)
+    .to(0.25, 0.8)
+    .corner()
+    .to(0.185, 0.8)
+    .corner()
+    .to(0.185, 0.75)
+    .corner()
+    .to(0, 0.75);
+  const parts: Part[] = [{ geo: lathe(p, r), finish: 'body' }, footRing(0.3, 0.15, r), ring(0.19, 0.6, 0.016, r), ring(0.25, 0.8, 0.012, r), ring(0.183, 0.3, 0.01, r)];
+  // Merlons: bevelled ring sectors around the parapet.
+  const n = 6;
+  const span = ((Math.PI * 2) / n) * 0.6;
+  for (let i = 0; i < n; i++) {
+    const a0 = (i / n) * Math.PI * 2;
+    const s = new Shape();
+    s.absarc(0, 0, 0.245, a0, a0 + span, false);
+    s.absarc(0, 0, 0.19, a0 + span, a0, true);
+    const geo = new ExtrudeGeometry(s, {
+      depth: 0.08, bevelEnabled: true, bevelThickness: 0.008, bevelSize: 0.006, bevelSegments: 3, curveSegments: Math.ceil(r.curve / 3),
+    });
+    parts.push({ geo, finish: 'body', matrix: at(0, 0.808, 0, -HALF_PI) });
+  }
+  // Gold arrow-slit inlays.
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    const slit = new Shape();
+    slit.moveTo(-0.012, -0.06);
+    slit.lineTo(0.012, -0.06);
+    slit.lineTo(0.012, 0.04);
+    slit.absarc(0, 0.04, 0.012, 0, Math.PI, false);
+    slit.lineTo(-0.012, -0.06);
+    const geo = new ExtrudeGeometry(slit, { depth: 0.01, bevelEnabled: true, bevelThickness: 0.004, bevelSize: 0.004, bevelSegments: 2 });
+    parts.push({ geo, finish: 'gold', matrix: at(Math.sin(a) * 0.181, 0.46, Math.cos(a) * 0.181, 0, a) });
+  }
+  return parts;
+}
+
+function bishop(r: Res): Part[] {
+  const p = new Profile().foot(0.29, 0.15, 0.19).curve([[0.12, 0.3], [0.085, 0.46]]);
+  collar(p, 0.085, 0.17, 0.5, 0.1);
+  p.curve([[0.13, 0.6], [0.142, 0.68], [0.115, 0.77], [0.055, 0.85], [0.012, 0.885]], 24).to(0, 0.89);
+  return [
+    { geo: lathe(p, r), finish: 'body' },
+    footRing(0.29, 0.15, r),
+    ring(0.172, 0.52, 0.015, r),
+    // Diagonal band where a Staunton bishop has its mitre cut.
+    { geo: new TorusGeometry(0.128, 0.011, 10, r.torus), finish: 'gold', matrix: new Matrix4().makeRotationZ(0.55).multiply(new Matrix4().makeRotationX(HALF_PI)).setPosition(0, 0.715, 0) },
+    ball(0.034, 0.915, r),
+  ];
+}
+
+function queen(r: Res): Part[] {
+  const p = new Profile().foot(0.33, 0.16, 0.21).curve([[0.14, 0.35], [0.1, 0.55], [0.095, 0.62]]);
+  collar(p, 0.095, 0.19, 0.64, 0.11);
+  p.curve([[0.15, 0.78], [0.205, 0.89]], 14).to(0.205, 0.9).corner().to(0.15, 0.9).corner().curve([[0.13, 0.95], [0.06, 0.99], [0, 1.0]], 12);
+  const parts: Part[] = [{ geo: lathe(p, r), finish: 'body' }, footRing(0.33, 0.16, r), ring(0.192, 0.66, 0.016, r), ring(0.2, 0.9, 0.013, r), ring(0.1, 0.6, 0.008, r)];
+  const n = 10;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    parts.push(ball(0.026, 0.928, r, Math.cos(a) * 0.195, Math.sin(a) * 0.195));
+  }
+  parts.push(ball(0.05, 1.04, r));
+  return parts;
+}
+
+function king(r: Res): Part[] {
+  const p = new Profile().foot(0.34, 0.17, 0.22).curve([[0.15, 0.38], [0.105, 0.6], [0.1, 0.7]]);
+  collar(p, 0.1, 0.2, 0.72, 0.12);
+  p.curve([[0.16, 0.86], [0.205, 0.97]], 14).to(0.205, 0.99).corner().to(0.16, 0.99).corner().curve([[0.15, 1.04], [0.08, 1.08], [0, 1.1]], 12);
+  const parts: Part[] = [{ geo: lathe(p, r), finish: 'body' }, footRing(0.34, 0.17, r), ring(0.202, 0.74, 0.016, r), ring(0.203, 0.99, 0.013, r), ring(0.105, 0.68, 0.008, r)];
+  const n = 8;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    parts.push({ geo: new ConeGeometry(0.03, 0.07, Math.max(8, r.sphere)), finish: 'gold', matrix: at(Math.cos(a) * 0.195, 1.03, Math.sin(a) * 0.195) });
+  }
+  // Cross finial: bevelled extrusion, so the edges catch light.
+  const w = 0.028;
+  const c = new Shape();
+  c.moveTo(-w, 0);
+  c.lineTo(w, 0);
+  c.lineTo(w, 0.1);
+  c.lineTo(0.075, 0.1);
+  c.lineTo(0.075, 0.1 + 2 * w);
+  c.lineTo(w, 0.1 + 2 * w);
+  c.lineTo(w, 0.21);
+  c.lineTo(-w, 0.21);
+  c.lineTo(-w, 0.1 + 2 * w);
+  c.lineTo(-0.075, 0.1 + 2 * w);
+  c.lineTo(-0.075, 0.1);
+  c.lineTo(-w, 0.1);
+  c.lineTo(-w, 0);
+  const cross = new ExtrudeGeometry(c, { depth: 0.03, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.01, bevelSegments: 3 });
+  cross.translate(0, 0, -0.015);
+  parts.push({ geo: cross, finish: 'gold', matrix: at(0, 1.08, 0) }, ball(0.04, 1.1, r));
+  return parts;
+}
+
+function knight(r: Res): Part[] {
+  const base = new Profile().foot(0.31, 0.15, 0.2).curve([[0.2, 0.2], [0.21, 0.24]], 6).to(0.21, 0.255).corner().to(0, 0.255);
+  // Side silhouette of a horse's head and neck (x = toward the muzzle, y = up).
+  const s = new Shape();
+  const v = (x: number, y: number): Vector2 => new Vector2(x, y);
+  s.moveTo(-0.16, 0.24);
+  s.splineThru([v(-0.185, 0.33), v(-0.17, 0.46), v(-0.13, 0.58), v(-0.075, 0.69)]); // back of neck
+  s.lineTo(-0.045, 0.86); // ear
+  s.lineTo(0.0, 0.75);
+  s.splineThru([v(0.05, 0.735), v(0.11, 0.69), v(0.18, 0.61), v(0.245, 0.525), v(0.295, 0.45)]); // forehead + face
+  s.splineThru([v(0.315, 0.41), v(0.3, 0.37), v(0.262, 0.352)]); // muzzle
+  s.lineTo(0.215, 0.36); // mouth
+  s.splineThru([v(0.17, 0.352), v(0.12, 0.38), v(0.07, 0.425)]); // jaw up to the cheek
+  s.splineThru([v(0.025, 0.4), v(0.0, 0.34), v(0.03, 0.285), v(0.09, 0.25), v(0.13, 0.24)]); // throat, chest
+  s.lineTo(-0.16, 0.24);
+  const depth = 0.1;
+  const head = new ExtrudeGeometry(s, {
+    depth, bevelEnabled: true, bevelThickness: 0.04, bevelSize: 0.028, bevelSegments: 6, curveSegments: r.curve,
+  });
+  head.translate(0, 0, -depth / 2);
+  // Taper: full cheeks, narrow muzzle and a slimmer crest, so it isn't a flat slab from the front.
+  const taper = (x: number, y: number): number => {
+    const muzzle = Math.min(1, Math.max(0, (x - 0.1) / 0.22));
+    const crest = Math.min(1, Math.max(0, (-x - 0.06) / 0.12)) * Math.min(1, Math.max(0, (y - 0.4) / 0.2));
+    return 1 - 0.38 * muzzle - 0.3 * crest;
+  };
+  const pos = head.attributes.position!;
+  for (let i = 0; i < pos.count; i++) pos.setZ(i, pos.getZ(i) * taper(pos.getX(i), pos.getY(i)));
+  head.computeVertexNormals();
+  // Mane: a gold crest along the back of the neck, centred on it.
+  const m = new Shape();
+  m.moveTo(-0.15, 0.26);
+  m.splineThru([v(-0.21, 0.35), v(-0.2, 0.48), v(-0.15, 0.61), v(-0.085, 0.71)]);
+  m.splineThru([v(-0.07, 0.66), v(-0.11, 0.58), v(-0.14, 0.47), v(-0.15, 0.35), v(-0.12, 0.27)]);
+  m.lineTo(-0.15, 0.26);
+  const mane = new ExtrudeGeometry(m, {
+    depth: 0.04, bevelEnabled: true, bevelThickness: 0.015, bevelSize: 0.01, bevelSegments: 4, curveSegments: r.curve,
+  });
+  mane.translate(0, 0, -0.02);
+  const eyeZ = (depth / 2 + 0.035) * taper(0.09, 0.62);
+  const noseZ = (depth / 2 + 0.03) * taper(0.27, 0.41);
+  return [
+    { geo: lathe(base, r), finish: 'body' },
+    footRing(0.31, 0.15, r),
+    ring(0.212, 0.25, 0.012, r),
+    { geo: head, finish: 'body' },
+    { geo: mane, finish: 'gold' },
+    ball(0.022, 0.62, r, 0.09, eyeZ),
+    ball(0.022, 0.62, r, 0.09, -eyeZ),
+    { geo: new TorusGeometry(0.022, 0.006, 8, 24), finish: 'gold', matrix: at(0.27, 0.41, noseZ) }, // nostrils
+    { geo: new TorusGeometry(0.022, 0.006, 8, 24), finish: 'gold', matrix: at(0.27, 0.41, -noseZ) },
+  ];
+}
+
+const BUILDERS: Record<PieceType, (r: Res) => Part[]> = { pawn, rook, bishop, queen, king, knight };
+
+const partCache = new Map<string, Part[]>();
+/** Geometry is shared by every piece of a type at a given detail; never disposed per piece. */
+export function pieceParts(type: PieceType, detail: Detail): readonly Part[] {
+  const key = `${type}:${detail}`;
+  let parts = partCache.get(key);
+  if (!parts) partCache.set(key, (parts = BUILDERS[type](RES[detail])));
+  return parts;
+}
+
+function buildPiece(type: PieceType, color: Color, detail: Detail): Group {
+  const mats = getMaterials(detail);
+  const body = color === 'white' ? mats.ivory : mats.ebony;
   const g = new Group();
-  const facing = color === 'white' ? 0 : Math.PI;
-  switch (type) {
-    case 'knight': {
-      addPart(g, lathe([...BASE, [0.17, 0.3], [0.17, 0.34], [0, 0.34]]), mat);
-      // Blocky stylised head: neck + muzzle, turned to face the opponent.
-      const head = new Group();
-      addPart(head, new BoxGeometry(0.2, 0.42, 0.26), mat, new Vector3(0, 0.52, 0.02), 0);
-      addPart(head, new BoxGeometry(0.18, 0.16, 0.3), mat, new Vector3(0, 0.66, -0.13), 0);
-      addPart(head, new BoxGeometry(0.05, 0.1, 0.05), mat, new Vector3(0.06, 0.78, 0.06));
-      addPart(head, new BoxGeometry(0.05, 0.1, 0.05), mat, new Vector3(-0.06, 0.78, 0.06));
-      head.rotation.y = facing;
-      g.add(head);
-      break;
-    }
-    case 'king': {
-      addPart(g, lathe(PROFILES.king), mat);
-      addPart(g, new BoxGeometry(0.05, 0.2, 0.05), mat, new Vector3(0, 1.07, 0));
-      addPart(g, new BoxGeometry(0.15, 0.05, 0.05), mat, new Vector3(0, 1.1, 0));
-      break;
-    }
-    case 'queen': {
-      addPart(g, lathe(PROFILES.queen), mat);
-      addPart(g, new SphereGeometry(0.045, 16, 12), mat, new Vector3(0, 1.03, 0));
-      break;
-    }
-    case 'rook': {
-      addPart(g, lathe(PROFILES.rook), mat);
-      // Crenellations.
-      for (let i = 0; i < 4; i++) {
-        const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-        addPart(g, new CylinderGeometry(0.05, 0.05, 0.08, 8), mat, new Vector3(Math.cos(a) * 0.2, 0.76, Math.sin(a) * 0.2));
-      }
-      break;
-    }
-    default:
-      addPart(g, lathe(PROFILES[type]), mat);
+  for (const part of pieceParts(type, detail)) {
+    const mesh = new Mesh(part.geo, part.finish === 'gold' ? mats.gold : body);
+    if (part.matrix) mesh.applyMatrix4(part.matrix);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    g.add(mesh);
+  }
+  if (type === 'knight') {
+    // Head in profile, turned ~25 degrees toward the opponent so it reads from either side.
+    g.rotation.y = color === 'white' ? 0.45 : Math.PI - 0.45;
   }
   return g;
 }
@@ -90,17 +256,23 @@ export interface PieceLayer {
   readonly group: Group;
   /** Reconcile meshes to the board. Returns true if any piece moved, appeared or disappeared. */
   sync(board: Board): boolean;
+  /** Swap geometry density + materials for a quality tier. Positions are unchanged. */
+  setDetail(detail: Detail): void;
 }
 
-export function createPieces(): PieceLayer {
+export function createPieces(initialDetail: Detail = 'high'): PieceLayer {
   const group = new Group();
   group.name = 'pieces';
-  const materials: Record<Color, MeshStandardMaterial> = {
-    white: new MeshStandardMaterial({ color: '#f1ece2', roughness: 0.35, metalness: 0.0 }),
-    black: new MeshStandardMaterial({ color: '#1d1b22', roughness: 0.25, metalness: 0.2 }),
-  };
+  let detail = initialDetail;
   const meshes = new Map<string, Group>();
   const tmp = new Vector3();
+
+  const make = (id: string, type: PieceType, color: Color): Group => {
+    const obj = buildPiece(type, color, detail);
+    obj.name = id;
+    obj.userData = { type, color };
+    return obj;
+  };
 
   return {
     group,
@@ -113,16 +285,11 @@ export function createPieces(): PieceLayer {
         if (obj && obj.userData.type !== piece.type) {
           // Promotion: same id, new shape.
           group.remove(obj);
-          obj.traverse((o) => {
-            if (o instanceof Mesh) o.geometry.dispose();
-          });
           meshes.delete(piece.id);
           obj = undefined;
         }
         if (!obj) {
-          obj = buildPiece(piece.type, piece.color, materials[piece.color]);
-          obj.name = piece.id;
-          obj.userData.type = piece.type;
+          obj = make(piece.id, piece.type, piece.color);
           meshes.set(piece.id, obj);
           group.add(obj);
           changed = true;
@@ -136,13 +303,21 @@ export function createPieces(): PieceLayer {
       for (const [id, obj] of meshes) {
         if (alive.has(id)) continue;
         group.remove(obj);
-        obj.traverse((o) => {
-          if (o instanceof Mesh) o.geometry.dispose();
-        });
         meshes.delete(id);
         changed = true;
       }
       return changed;
+    },
+    setDetail(next) {
+      if (next === detail) return;
+      detail = next;
+      for (const [id, old] of meshes) {
+        const obj = make(id, old.userData.type as PieceType, old.userData.color as Color);
+        obj.position.copy(old.position);
+        group.remove(old);
+        group.add(obj);
+        meshes.set(id, obj);
+      }
     },
   };
 }

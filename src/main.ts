@@ -1,16 +1,18 @@
-import { DirectionalLight, PerspectiveCamera, Scene, Timer } from 'three';
+import { Color, DirectionalLight, Fog, HemisphereLight, PerspectiveCamera, Scene, Timer, Vector3 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { createRenderer } from './render/renderer';
 import { loadEnvironment } from './render/env';
 import { createPost } from './render/post';
 import { createQualityGovernor, parseTier } from './render/quality';
 import { createBoard } from './scene/board';
+import { createHall } from './scene/hall';
+import { detailForTier } from './scene/materials';
 import { createPieces } from './scene/pieces';
 import { applyMove, initialState, legalMoves, outcome, parseUci, toFen, type GameState } from './game';
 import { createAiController } from './ai/controller';
 import { createWorkerPort } from './ai/workerPort';
 
-const HDRI_URL = `${import.meta.env.BASE_URL}hdri/studio_small_08_1k.hdr`;
+const HDRI_URL = `${import.meta.env.BASE_URL}hdri/sepulchral_chapel_rotunda_1k.hdr`;
 const BUDGET_MS = 1000 / 60;
 const AI_COLOR = 'black';
 
@@ -18,38 +20,56 @@ async function main(): Promise<void> {
   const hud = document.getElementById('hud')!;
   const { renderer, markShadowsDirty, shadowUpdates } = createRenderer(document.body);
 
+  const params = new URLSearchParams(location.search);
+  const forced = parseTier(params.get('tier'));
+  const startTier = forced ?? 'high';
+
   const scene = new Scene();
-  const camera = new PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
-  camera.position.set(0, 9.5, 10.5);
+  scene.background = new Color('#140d08');
+  scene.fog = new Fog('#140d08', 22, 48);
+
+  // Default view: behind White, ~38 degrees above the board. `?cam=x,y,z` overrides (screenshots).
+  const camera = new PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 120);
+  const camParam = params.get('cam')?.split(',').map(Number);
+  const camPos = camParam?.length === 3 && camParam.every(Number.isFinite) ? new Vector3(...(camParam as [number, number, number])) : new Vector3(0, 8.6, 11.0);
+  camera.position.copy(camPos);
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.set(0, 0, 0);
+  controls.target.set(0, -0.2, 0.4);
   controls.enableDamping = true;
-  controls.maxPolarAngle = Math.PI * 0.47;
+  controls.dampingFactor = 0.08;
+  controls.enablePan = false;
+  controls.minDistance = 5;
+  controls.maxDistance = 20;
+  controls.minPolarAngle = 0.12;
+  controls.maxPolarAngle = 1.25; // never below ~18 degrees above the board plane
+  controls.update();
 
   const env = await loadEnvironment(renderer, HDRI_URL);
   scene.environment = env;
-  scene.environmentIntensity = 0.55; // let the key light's shadows read against the soft studio fill
-  scene.background = env;
-  scene.backgroundBlurriness = 0.6;
-  scene.backgroundIntensity = 0.35;
+  scene.environmentIntensity = 0.45;
 
-  const sun = new DirectionalLight('#fff4e6', 2.2);
-  sun.position.set(5, 10, 4);
+  // Warm key light from a high window; the only shadow caster.
+  const sun = new DirectionalLight('#ffd9a8', 2.6);
+  sun.position.set(-5, 12, 6);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -6;
-  sun.shadow.camera.right = 6;
-  sun.shadow.camera.top = 6;
-  sun.shadow.camera.bottom = -6;
-  sun.shadow.camera.near = 1;
+  sun.shadow.camera.left = -7;
+  sun.shadow.camera.right = 7;
+  sun.shadow.camera.top = 7;
+  sun.shadow.camera.bottom = -7;
+  sun.shadow.camera.near = 2;
   sun.shadow.camera.far = 30;
-  sun.shadow.bias = -0.0005;
-  sun.shadow.normalBias = 0.02;
-  sun.shadow.radius = 3; // PCF blur (PCFSoftShadowMap was removed in three r18x)
+  sun.shadow.bias = -0.0004;
+  sun.shadow.normalBias = 0.015;
+  sun.shadow.radius = 4; // PCF blur (PCFSoftShadowMap was removed in three r18x)
   scene.add(sun);
+  scene.add(new HemisphereLight('#ffe6c4', '#2a1c10', 0.35));
 
-  scene.add(createBoard());
-  const pieces = createPieces();
+  let detail = detailForTier(startTier);
+  scene.add(createHall(renderer.capabilities.getMaxAnisotropy(), detail === 'low').group);
+  const board = createBoard(detail);
+  scene.add(board.group);
+  const pieces = createPieces(detail);
   scene.add(pieces.group);
 
   // ---- game + AI -----------------------------------------------------------
@@ -132,9 +152,7 @@ async function main(): Promise<void> {
   });
 
   // ---- quality + render loop -------------------------------------------------
-  const params = new URLSearchParams(location.search);
-  const forced = parseTier(params.get('tier'));
-  const post = createPost(renderer, scene, camera, forced ?? 'high');
+  const post = createPost(renderer, scene, camera, startTier);
   const governor = forced ? null : createQualityGovernor({ budgetMs: BUDGET_MS });
 
   window.addEventListener('resize', () => {
@@ -155,7 +173,15 @@ async function main(): Promise<void> {
     controls.update();
     if (governor) {
       const next = governor.sample(dt * 1000);
-      if (next) post.setTier(next);
+      if (next) {
+        post.setTier(next);
+        const d = detailForTier(next);
+        if (d !== detail) {
+          detail = d;
+          board.setDetail(d);
+          pieces.setDetail(d); // same silhouettes and positions, so the cached shadow map stays valid
+        }
+      }
     }
     post.render(dt);
     hudAcc += dt;
