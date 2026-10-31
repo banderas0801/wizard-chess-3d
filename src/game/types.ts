@@ -1,44 +1,20 @@
-/**
- * Pure Chess Domain Types (Strict TypeScript, KHÔNG import Three.js)
- */
+export const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] as const;
+export const RANKS = ['1', '2', '3', '4', '5', '6', '7', '8'] as const;
 
+export type File = (typeof FILES)[number];
+export type Rank = (typeof RANKS)[number];
+/** Algebraic square name, e.g. "e4". Only the 64 real squares are representable. */
+export type Square = `${File}${Rank}`;
+
+export type Color = 'white' | 'black';
 export type PieceType = 'pawn' | 'knight' | 'bishop' | 'rook' | 'queen' | 'king';
-export type PieceColor = 'w' | 'b';
 
+/** A piece keeps a stable id for its whole life so the renderer can track it across moves. */
 export interface Piece {
-  type: PieceType;
-  color: PieceColor;
-  hasMoved?: boolean;
+  readonly id: string;
+  readonly type: PieceType;
+  readonly color: Color;
 }
 
-export type Board = (Piece | null)[][]; // 8x8 grid (0,0 = a8, 7,7 = h1)
-
-export interface Square {
-  r: number; // 0..7
-  c: number; // 0..7
-}
-
-export interface Move {
-  from: Square;
-  to: Square;
-  piece: Piece;
-  captured: Piece | null;
-  promotion?: PieceType;
-  isCastling?: boolean;
-  isEnPassant?: boolean;
-}
-
-export interface GameState {
-  board: Board;
-  turn: PieceColor;
-  castling: {
-    w: { k: boolean; q: boolean };
-    b: { k: boolean; q: boolean };
-  };
-  enPassant: Square | null;
-  halfMoveClock: number;
-  fullMoveNumber: number;
-  isCheck: boolean;
-  isCheckmate: boolean;
-  isStalemate: boolean;
-}
+/** Immutable mapping of occupied squares to pieces. Empty squares are absent. */
+export type Board = ReadonlyMap<Square, Piece>;

@@ -1,63 +1,18 @@
-import * as THREE from 'three';
-import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
-
-export interface EnvironmentResult {
-  envMap: THREE.Texture;
-  dispose: () => void;
-}
+import { PMREMGenerator, type Texture, type WebGLRenderer } from 'three';
+import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 
 /**
- * Nạp HDRI 1k (Poly Haven CC0) bằng RGBELoader và tạo PMREM đúng 1 lần rồi giải phóng generator
+ * Loads an equirectangular .hdr and prefilters it into a PMREM env map exactly once.
+ * The generator and the source equirect texture are disposed before returning;
+ * the caller owns (and must eventually dispose) the returned texture.
  */
-export async function loadEnvironment(
-  renderer: THREE.WebGLRenderer,
-  url: string
-): Promise<EnvironmentResult> {
-  const pmremGenerator = new THREE.PMREMGenerator(renderer);
-  pmremGenerator.compileEquirectangularShader();
-
-  const loader = new RGBELoader();
-
+export async function loadEnvironment(r: WebGLRenderer, url: string): Promise<Texture> {
+  const source = await new HDRLoader().loadAsync(url);
+  const pmrem = new PMREMGenerator(r);
   try {
-    const hdrTexture = await loader.loadAsync(url);
-    const envMap = pmremGenerator.fromEquirectangular(hdrTexture).texture;
-
-    // Giải phóng bộ nhớ đệm thô ngay lập tức sau khi nướng PMREM
-    hdrTexture.dispose();
-    pmremGenerator.dispose();
-
-    return {
-      envMap,
-      dispose: () => {
-        envMap.dispose();
-      }
-    };
-  } catch (err) {
-    pmremGenerator.dispose();
-    console.warn(`[Env] Không thể tải HDRI từ "${url}", fallback môi trường phòng giả lập.`, err);
-
-    // Fallback: Tạo PMREM từ một scene giả lập tối thiểu nếu chưa có file .hdr
-    const fallbackScene = new THREE.Scene();
-    fallbackScene.background = new THREE.Color(0x181e2b);
-
-    const lightBoxGeo = new THREE.BoxGeometry(1, 1, 1);
-    const lightBoxMat = new THREE.MeshBasicMaterial({ color: 0xfff4d6 });
-    const lightBox = new THREE.Mesh(lightBoxGeo, lightBoxMat);
-    lightBox.position.set(0, 10, 5);
-    lightBox.scale.set(12, 2, 2);
-    fallbackScene.add(lightBox);
-
-    const fallbackGenerator = new THREE.PMREMGenerator(renderer);
-    const fallbackEnv = fallbackGenerator.fromScene(fallbackScene, 0.04).texture;
-    fallbackGenerator.dispose();
-    lightBoxGeo.dispose();
-    lightBoxMat.dispose();
-
-    return {
-      envMap: fallbackEnv,
-      dispose: () => {
-        fallbackEnv.dispose();
-      }
-    };
+    return pmrem.fromEquirectangular(source).texture;
+  } finally {
+    pmrem.dispose();
+    source.dispose();
   }
 }

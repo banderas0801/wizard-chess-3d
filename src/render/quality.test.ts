@@ -1,137 +1,125 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { createQualityGovernor } from './quality';
+import { describe, expect, it } from 'vitest';
+import { createQualityGovernor, type QualityTier } from './quality';
 
-describe('QualityGovernor (Hysteresis Frame Rate Regulator)', () => {
-  let virtualTime = 0;
-  const mockNow = () => virtualTime;
+const BUDGET = 16; // ms
+const SLOW = BUDGET * 1.5; // > 1.2x
+const FAST = BUDGET * 0.5; // < 0.7x
+const MID = BUDGET; // inside hysteresis band
 
-  beforeEach(() => {
-    virtualTime = 0;
+function rig(initial?: QualityTier) {
+  let t = 0;
+  const gov = createQualityGovernor({ budgetMs: BUDGET, now: () => t, ...(initial ? { initial } : {}) });
+  /** Feed n frames of the given duration, advancing the fake clock by that duration each frame. */
+  const feed = (n: number, ms: number): (QualityTier | null)[] => {
+    const out: (QualityTier | null)[] = [];
+    for (let i = 0; i < n; i++) {
+      t += ms;
+      out.push(gov.sample(ms));
+    }
+    return out;
+  };
+  const changes = (xs: (QualityTier | null)[]) => xs.filter((x): x is QualityTier => x !== null);
+  return { gov, feed, changes, advance: (ms: number) => (t += ms), time: () => t };
+}
+
+describe('quality governor', () => {
+  it('starts high and returns null while unchanged', () => {
+    const { gov, feed } = rig();
+    expect(gov.tier).toBe('high');
+    expect(feed(200, MID).every((x) => x === null)).toBe(true);
+    expect(feed(200, FAST).every((x) => x === null)).toBe(true); // already at top
+    expect(gov.tier).toBe('high');
   });
 
-  it('khởi tạo với tier mặc định high', () => {
-    const gov = createQualityGovernor({ budgetMs: 16.67, nowFn: mockNow });
-    expect(gov.getCurrentTier()).toBe('high');
+  it('downgrades fast: high -> low after 30 slow frames, then low -> off after 30 more', () => {
+    const { gov, feed } = rig();
+    const first = feed(30, SLOW);
+    expect(first.slice(0, 29).every((x) => x === null)).toBe(true);
+    expect(first[29]).toBe('low');
+    const second = feed(30, SLOW);
+    expect(second.slice(0, 29).every((x) => x === null)).toBe(true); // window was reset
+    expect(second[29]).toBe('off');
+    expect(feed(100, SLOW).every((x) => x === null)).toBe(true); // floor
+    expect(gov.tier).toBe('off');
   });
 
-  it('hạ tier từ high xuống low khi trung bình 30 frame > budgetMs * 1.2 (20.0ms)', () => {
-    const gov = createQualityGovernor({ budgetMs: 16.67, nowFn: mockNow });
-
-    let changedTier = null;
-    // Bơm 29 frame chậm (25ms) -> chưa đủ 30 frame
-    for (let i = 0; i < 29; i++) {
-      virtualTime += 25;
-      changedTier = gov.sample(25);
-      expect(changedTier).toBeNull();
-    }
-
-    // Frame thứ 30 chậm -> hạ xuống 'low'
-    virtualTime += 25;
-    changedTier = gov.sample(25);
-    expect(changedTier).toBe('low');
-    expect(gov.getCurrentTier()).toBe('low');
+  it('uses the rolling mean, not single spikes', () => {
+    const { gov, feed } = rig();
+    feed(29, MID);
+    expect(feed(1, BUDGET * 5)[0]).toBeNull(); // mean = (29*16+80)/30 ≈ 18.1 < 19.2
+    expect(gov.tier).toBe('high');
   });
 
-  it('tiếp tục hạ từ low xuống off nếu tiếp tục lag 30 frame', () => {
-    const gov = createQualityGovernor({
-      budgetMs: 16.67,
-      initialTier: 'low',
-      nowFn: mockNow
-    });
-
-    let changedTier = null;
-    for (let i = 0; i < 30; i++) {
-      virtualTime += 24;
-      changedTier = gov.sample(24);
-    }
-
-    expect(changedTier).toBe('off');
-    expect(gov.getCurrentTier()).toBe('off');
+  it('does not upgrade before 5s of continuous stability', () => {
+    const { gov, feed, advance } = rig();
+    feed(30, SLOW); // -> low at ~0.72s
+    advance(20_000); // well past cooldown
+    // 4.9s of fast frames
+    const out = feed(Math.floor(4_900 / FAST), FAST);
+    expect(out.every((x) => x === null)).toBe(true);
+    // one mid frame breaks the streak; the next 4.9s is still not enough
+    feed(1, MID);
+    expect(feed(Math.floor(4_900 / FAST), FAST).every((x) => x === null)).toBe(true);
+    expect(gov.tier).toBe('low');
   });
 
-  it('KHÔNG nâng tier nếu chưa qua 10 giây kể từ lần hạ gần nhất', () => {
-    const gov = createQualityGovernor({
-      budgetMs: 16.67,
-      initialTier: 'high',
-      nowFn: mockNow
-    });
-
-    // 1. Gây lag để hạ xuống 'low' tại t = 750ms
-    for (let i = 0; i < 30; i++) {
-      virtualTime += 25;
-      gov.sample(25);
-    }
-    expect(gov.getCurrentTier()).toBe('low');
-
-    // 2. Chạy 5 giây cực mượt (10ms < 11.67ms) nhưng chỉ mới qua 5.75s kể từ lúc hạ
-    let changedTier = null;
-    for (let i = 0; i < 500; i++) { // 500 * 10ms = 5000ms
-      virtualTime += 10;
-      changedTier = gov.sample(10);
-    }
-
-    // Vẫn chưa qua 10s kể từ lúc hạ (t = 750 + 5000 = 5750ms < 10000ms)
-    expect(changedTier).toBeNull();
-    expect(gov.getCurrentTier()).toBe('low');
+  it('does not upgrade within 10s of the last downgrade even if stable', () => {
+    const { gov, feed, time } = rig();
+    feed(30, SLOW);
+    const downAt = time();
+    expect(gov.tier).toBe('low');
+    const out: (QualityTier | null)[] = [];
+    while (time() - downAt < 9_990) out.push(...feed(1, FAST));
+    expect(out.every((x) => x === null)).toBe(true);
+    expect(gov.tier).toBe('low');
+    // crossing the 10s mark (with >5s stable) upgrades
+    const after = feed(5, FAST);
+    expect(after).toContain('high');
   });
 
-  it('KHÔNG nâng tier nếu chuỗi 5 giây mượt bị ngắt quãng bởi 1 frame lag', () => {
-    const gov = createQualityGovernor({
-      budgetMs: 16.67,
-      initialTier: 'low',
-      nowFn: mockNow
-    });
-
-    // Cho qua 12 giây kể từ lần hạ
-    virtualTime = 12000;
-
-    // Chạy mượt 4.5 giây (450 frames @ 10ms)
-    for (let i = 0; i < 450; i++) {
-      virtualTime += 10;
-      gov.sample(10);
+  it('upgrades off -> low -> high after stability, each step needing its own 5s', () => {
+    const { gov, feed, changes, time } = rig();
+    feed(60, SLOW);
+    expect(gov.tier).toBe('off');
+    const downAt = time();
+    const log: { tier: QualityTier; at: number }[] = [];
+    for (let i = 0; i < 3_000 && gov.tier !== 'high'; i++) {
+      const r = feed(1, FAST)[0];
+      if (r) log.push({ tier: r, at: time() });
     }
-
-    // Xuất hiện 1 frame lag (15ms > 11.67ms) làm reset chuỗi liên tục
-    virtualTime += 15;
-    gov.sample(15);
-
-    // Chạy thêm 1 giây nữa (tổng cộng 5.5s nhưng không liên tục)
-    let changedTier = null;
-    for (let i = 0; i < 100; i++) {
-      virtualTime += 10;
-      changedTier = gov.sample(10);
-    }
-
-    expect(changedTier).toBeNull();
-    expect(gov.getCurrentTier()).toBe('low');
+    expect(changes(log.map((l) => l.tier))).toEqual(['low', 'high']);
+    expect(log[0]!.at - downAt).toBeGreaterThanOrEqual(10_000);
+    expect(log[1]!.at - log[0]!.at).toBeGreaterThanOrEqual(5_000);
   });
 
-  it('NÂNG TIER THÀNH CÔNG khi mượt liên tục 5 giây VÀ đã qua 10 giây kể từ lần hạ', () => {
-    const gov = createQualityGovernor({
-      budgetMs: 16.67,
-      initialTier: 'high',
-      nowFn: mockNow
-    });
-
-    // 1. Hạ xuống 'low' tại thời điểm t = 750ms
-    for (let i = 0; i < 30; i++) {
-      virtualTime += 25;
-      gov.sample(25);
+  it('does not oscillate on a borderline sequence', () => {
+    const { feed, changes } = rig('low');
+    // Alternating just-under-downgrade and just-over-upgrade thresholds for 60s.
+    const seq: (QualityTier | null)[] = [];
+    for (let i = 0; i < 3_000; i++) {
+      seq.push(...feed(1, i % 2 === 0 ? BUDGET * 0.69 : BUDGET * 1.19));
     }
-    expect(gov.getCurrentTier()).toBe('low');
+    expect(changes(seq)).toEqual([]);
+    // Sitting right at budget for a minute: also nothing.
+    expect(changes(feed(Math.floor(60_000 / MID), MID))).toEqual([]);
+  });
 
-    // 2. Thời gian trôi qua 6 giây bình thường
-    virtualTime += 6000;
-
-    // 3. Bây giờ chạy mượt liên tục 5 giây (500 frames @ 10ms)
-    // Tại cuối chu kỳ này, tổng thời gian = 750 + 6000 + 5000 = 11750ms (> 10s kể từ lần hạ)
-    let changedTier = null;
-    for (let i = 0; i < 500; i++) {
-      virtualTime += 10;
-      changedTier = gov.sample(10);
+  it('limits flapping under a periodic slow/fast load to at most one change per ~10s', () => {
+    const { feed, changes } = rig();
+    const seq: (QualityTier | null)[] = [];
+    for (let cycle = 0; cycle < 6; cycle++) {
+      seq.push(...feed(40, SLOW)); // ~1s slow burst
+      seq.push(...feed(Math.floor(2_000 / FAST), FAST)); // 2s fast
     }
+    // ~18s total: bursts can only push down; upgrades never fire because 5s stability is never reached.
+    expect(changes(seq).every((t) => t !== 'high')).toBe(true);
+    expect(changes(seq)).toEqual(['low', 'off']);
+  });
 
-    expect(changedTier).toBe('high');
-    expect(gov.getCurrentTier()).toBe('high');
+  it('ignores invalid samples', () => {
+    const { gov } = rig();
+    expect(gov.sample(Number.NaN)).toBeNull();
+    expect(gov.sample(-1)).toBeNull();
+    expect(gov.tier).toBe('high');
   });
 });

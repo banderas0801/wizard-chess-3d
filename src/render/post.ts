@@ -1,123 +1,83 @@
-import * as THREE from 'three';
+import { Vector2, type Camera, type Scene, type WebGLRenderer } from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import type { QualityTier } from './quality';
 
-export type QualityTier = 'off' | 'low' | 'high';
-
-export interface PostProcessingPipeline {
-  setTier: (tier: QualityTier) => void;
-  getTier: () => QualityTier;
-  render: (delta: number) => void;
-  resize: (width: number, height: number) => void;
-  dispose: () => void;
+export interface Post {
+  setTier(t: QualityTier): void;
+  readonly tier: QualityTier;
+  render(dt: number): void;
+  resize(w: number, h: number): void;
+  dispose(): void;
 }
 
-/**
- * Đọc tham số tier từ URL query string: ?tier=off|low|high
- */
-export function getTierFromUrl(): QualityTier | null {
-  if (typeof window === 'undefined' || !window.location) return null;
-  const params = new URLSearchParams(window.location.search);
-  const tierParam = params.get('tier')?.toLowerCase();
-  if (tierParam === 'off' || tierParam === 'low' || tierParam === 'high') {
-    return tierParam as QualityTier;
-  }
-  return null;
-}
+// Threshold is in linear HDR (pre tone-mapping) units: only speculars and hot highlights bloom.
+const BLOOM = { strength: 0.2, radius: 0.3, threshold: 4 } as const;
 
 /**
- * Khởi tạo hệ thống hậu kỳ phân tầng QualityTier:
- * - 'off': Render trực tiếp qua renderer.render (tiết kiệm GPU tối đa)
- * - 'low': RenderPass + UnrealBloomPass (Ánh sáng đuốc và rune ma thuật)
- * - 'high': RenderPass + Bloom + GTAOPass + SMAAPass (Đầy đủ chi tiết bóng góc khuất & khử răng cưa)
+ * Tiers: off = plain renderer.render (no composer at all);
+ *        low = Render -> Bloom -> Output;
+ *        high = Render -> GTAO -> Bloom -> Output -> SMAA.
+ * setTier rebuilds the composer/passes on the SAME renderer; it never creates a renderer.
  */
-export function createPost(
-  renderer: THREE.WebGLRenderer,
-  scene: THREE.Scene,
-  camera: THREE.PerspectiveCamera
-): PostProcessingPipeline {
-  let width = window.innerWidth;
-  let height = window.innerHeight;
+export function createPost(r: WebGLRenderer, scene: Scene, cam: Camera, initial: QualityTier = 'high'): Post {
+  const size = r.getSize(new Vector2());
+  let width = size.x;
+  let height = size.y;
+  let tier: QualityTier = initial;
+  let composer: EffectComposer | null = null;
 
-  const urlTier = getTierFromUrl();
-  let currentTier: QualityTier = urlTier || 'high';
+  const teardown = (): void => {
+    if (!composer) return;
+    for (const pass of composer.passes) pass.dispose();
+    composer.dispose();
+    composer = null;
+  };
 
-  // 1. Base EffectComposer
-  const composer = new EffectComposer(renderer);
-  const renderPass = new RenderPass(scene, camera);
-  composer.addPass(renderPass);
-
-  // 2. GTAO Pass (Bóng góc khuất giáo đường)
-  const gtaoPass = new GTAOPass(scene, camera, width, height);
-  gtaoPass.output = GTAOPass.OUTPUT.Default;
-  gtaoPass.blendIntensity = 0.8;
-  gtaoPass.enabled = currentTier === 'high';
-  composer.addPass(gtaoPass);
-
-  // 3. UnrealBloomPass (Phát quang ngọn lửa & bệ ma thuật)
-  const bloomResolution = new THREE.Vector2(width, height);
-  const bloomPass = new UnrealBloomPass(bloomResolution, 0.45, 0.4, 0.85);
-  bloomPass.enabled = currentTier === 'low' || currentTier === 'high';
-  composer.addPass(bloomPass);
-
-  // 4. SMAAPass (Khử răng cưa chất lượng cao)
-  const smaaPass = new SMAAPass(width * renderer.getPixelRatio(), height * renderer.getPixelRatio());
-  smaaPass.enabled = currentTier === 'high';
-  composer.addPass(smaaPass);
-
-  function applyTier(tier: QualityTier) {
-    currentTier = tier;
-    switch (tier) {
-      case 'off':
-        gtaoPass.enabled = false;
-        bloomPass.enabled = false;
-        smaaPass.enabled = false;
-        break;
-      case 'low':
-        gtaoPass.enabled = false;
-        bloomPass.enabled = true;
-        smaaPass.enabled = false;
-        break;
-      case 'high':
-        gtaoPass.enabled = true;
-        bloomPass.enabled = true;
-        smaaPass.enabled = true;
-        break;
+  const build = (): void => {
+    teardown();
+    if (tier === 'off') return;
+    const c = new EffectComposer(r);
+    c.setPixelRatio(r.getPixelRatio());
+    c.setSize(width, height);
+    c.addPass(new RenderPass(scene, cam));
+    if (tier === 'high') {
+      const gtao = new GTAOPass(scene, cam, width, height);
+      gtao.output = GTAOPass.OUTPUT.Default;
+      gtao.blendIntensity = 0.8;
+      c.addPass(gtao);
     }
-  }
+    c.addPass(new UnrealBloomPass(new Vector2(width, height), BLOOM.strength, BLOOM.radius, BLOOM.threshold));
+    c.addPass(new OutputPass());
+    if (tier === 'high') c.addPass(new SMAAPass());
+    composer = c;
+  };
 
-  // Khởi tạo ban đầu
-  applyTier(currentTier);
+  build();
 
   return {
-    setTier: (tier: QualityTier) => {
-      // Nếu có URL param cố định thì ưu tiên giữ theo URL param
-      if (urlTier && tier !== urlTier) return;
-      applyTier(tier);
+    get tier() {
+      return tier;
     },
-    getTier: () => currentTier,
-    render: (delta: number) => {
-      if (currentTier === 'off') {
-        renderer.render(scene, camera);
-      } else {
-        composer.render(delta);
-      }
+    setTier(t) {
+      if (t === tier) return;
+      tier = t;
+      build();
     },
-    resize: (newW: number, newH: number) => {
-      width = newW;
-      height = newH;
-      composer.setSize(width, height);
-      gtaoPass.setSize(width, height);
-      smaaPass.setSize(width * renderer.getPixelRatio(), height * renderer.getPixelRatio());
+    render(dt) {
+      if (composer) composer.render(dt);
+      else r.render(scene, cam);
     },
-    dispose: () => {
-      composer.dispose();
-      gtaoPass.dispose();
-      bloomPass.dispose();
-      smaaPass.dispose();
-    }
+    resize(w, h) {
+      width = w;
+      height = h;
+      composer?.setPixelRatio(r.getPixelRatio());
+      composer?.setSize(w, h);
+    },
+    dispose: teardown,
   };
 }
