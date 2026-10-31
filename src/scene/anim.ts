@@ -84,8 +84,12 @@ export interface ProceduralOptions {
   readonly seed?: number;
 }
 
-export function createProceduralAnimator(opts: ProceduralOptions = {}): PieceAnimator {
-  const fragmentCount = opts.fragments ?? 18;
+export interface ProceduralAnimator extends PieceAnimator {
+  /** Fragments per shatter (scaled by quality tier). */
+  fragments: number;
+}
+
+export function createProceduralAnimator(opts: ProceduralOptions = {}): ProceduralAnimator {
   const rand = mulberry32(opts.seed ?? 7);
   const homes = new Map<Object3D, Home>();
   const tweens = new Map<Object3D, Tween>();
@@ -135,7 +139,7 @@ export function createProceduralAnimator(opts: ProceduralOptions = {}): PieceAni
     const height = (obj.userData.height as number | undefined) ?? 0.6;
     fragDur = Math.max(fragDur - fragT, duration);
     fragT = 0;
-    for (let i = 0; i < fragmentCount; i++) {
+    for (let i = 0; i < animator.fragments; i++) {
       const src = meshes[Math.floor(rand() * meshes.length)]!;
       const m = new Mesh(fragGeo, src.material as Material);
       const size = 0.03 + rand() * 0.05;
@@ -156,8 +160,9 @@ export function createProceduralAnimator(opts: ProceduralOptions = {}): PieceAni
     }
   };
 
-  const animator: PieceAnimator = {
+  const animator: ProceduralAnimator = {
     idleSway: true,
+    fragments: opts.fragments ?? 18,
     get moving() {
       return tweens.size > 0 || fragments.length > 0;
     },
