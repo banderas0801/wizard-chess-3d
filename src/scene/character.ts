@@ -1,101 +1,109 @@
-// Step 4b prototype: one piece type replaced by a rigged, animated character (Quaternius
-// "Animated Knight Pack", CC0 - see public/models/SOURCES.md), driven by an AnimationMixer.
+// Step 4b: the knight is a rigged, animated horse (Quaternius "Ultimate Animated Animals" Horse,
+// CC0 - see public/models/SOURCES.md) standing on the knight's own turned base, driven by an
+// AnimationMixer, with our own horned-helm lancer (rider.ts) riding its spine bone.
 //
 // It wraps the procedural animator rather than replacing it: the base animator still owns the
-// piece transform (glide/hop path, lunge, cancel/home poses, shatter debris), and the mixer
-// only plays the skeleton clip that matches. So choreography, cancel and the FEN rules are
-// unchanged, and pieces without a character keep working exactly as before.
+// piece transform (hop arc, lunge, cancel/home poses, shatter debris), and the mixer only plays
+// the skeleton clip that matches. Rearing is a pitch of the horse about its hind hooves, layered
+// on top. So choreography, cancel and the FEN rules are unchanged, and pieces without a
+// character keep working exactly as before.
 import {
   AnimationMixer,
+  Box3,
+  Group,
   LoopOnce,
   LoopRepeat,
-  Material,
-  Mesh,
-  MeshStandardMaterial,
-  Quaternion,
-  Vector3,
   type AnimationAction,
   type AnimationClip,
-  type Group,
+  type Material,
+  type Mesh,
   type Object3D,
   type SkinnedMesh,
 } from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { Color, PieceType } from '../game';
 import { headingYaw, type Clip, type ClipParams, type PieceAnimator, type ProceduralAnimator } from './anim';
+import { createRider, LANCE_COUCHED, LANCE_REST, SADDLE } from './rider';
 
-/** Skeleton clip per animator verb (names from the FBX). */
+/** Skeleton clip per animator verb (names from the glTF). */
 export const CHARACTER_CLIPS = {
-  idle: 'HumanArmature|Idle_swordRight',
-  move: 'HumanArmature|Walking',
-  run: 'HumanArmature|Run_swordRight',
-  attack: 'HumanArmature|Run_swordAttack',
-  death: 'HumanArmature|Death',
+  idle: 'Idle',
+  /** Knights always leap: one gallop-jump stretched over the hop. */
+  move: 'Gallop_Jump',
+  /** Same clip timed so the forelegs tuck at the top of the rear and land on the strike. */
+  attack: 'Gallop_Jump',
+  death: 'Death',
 } as const;
 type ClipKey = keyof typeof CHARACTER_CLIPS;
+
+/** Which finish each source material takes (single-tone figurine: body colour, gold hooves). */
+export type Finish = 'body' | 'accent' | 'eye';
+const FINISH: Record<string, Finish> = {
+  main: 'body', main_dark: 'body', main_light: 'body', muzzle: 'body', hair: 'body', eye_white: 'body',
+  hooves: 'accent', eye_black: 'eye',
+};
+export const finishFor = (materialName: string): Finish => FINISH[materialName.toLowerCase()] ?? 'body';
+
+/** Gallop_Jump: fraction of the clip where the forelegs are highest / where they land. */
+const JUMP_PEAK = 0.4;
+const JUMP_LAND = 0.75;
 
 export interface CharacterKit {
   readonly template: Object3D;
   readonly clips: ReadonlyMap<ClipKey, AnimationClip>;
-  /** Template height in its own units, for scaling to the piece it replaces. */
-  readonly height: number;
+  /** Model-space bounds (bind pose): length along z, height along y. */
+  readonly bounds: Box3;
 }
 
-export async function loadCharacterKit(baseUrl: string): Promise<CharacterKit> {
-  // FBX parsing (and its inflate dependency) is a separate chunk: only fetched when characters are on.
-  const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js');
-  const loader = new FBXLoader();
-  const [body, sword, helmet] = await Promise.all([
-    loader.loadAsync(`${baseUrl}/KnightCharacter.fbx`),
-    loader.loadAsync(`${baseUrl}/Sword.fbx`),
-    loader.loadAsync(`${baseUrl}/Helmet1.fbx`),
-  ]);
-  return buildCharacterKit(body, sword, helmet);
+export async function loadCharacterKit(url: string): Promise<CharacterKit> {
+  // glTF parsing is a separate chunk: only fetched when characters are on.
+  const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+  const gltf = await new GLTFLoader().loadAsync(url);
+  return buildCharacterKit(gltf.scene, gltf.animations);
 }
 
-/** Pure assembly of the loaded pack parts (testable without fetch). */
-export function buildCharacterKit(body: Group, sword: Object3D, helmet: Object3D): CharacterKit {
-  const byName = new Map(body.animations.map((c) => [c.name, c]));
+/** Pure assembly of the loaded model (testable without fetch). */
+export function buildCharacterKit(scene: Object3D, animations: readonly AnimationClip[]): CharacterKit {
+  const byName = new Map(animations.map((c) => [c.name, c]));
   const clips = new Map<ClipKey, AnimationClip>();
   for (const [k, name] of Object.entries(CHARACTER_CLIPS) as [ClipKey, string][]) {
     const c = byName.get(name);
     if (!c) throw new Error(`character clip missing: ${name}`);
     clips.set(k, c);
   }
-  // Sword in the right palm (pack readme: "parent the weapon to the Palm.R bone").
-  const palm = body.getObjectByName('PalmR');
-  if (palm) {
-    sword.scale.setScalar(0.01); // bones live inside the x100 armature
-    sword.rotation.set(0, 0, Math.PI / 2);
-    palm.add(sword);
-  }
-  // Helmet on the head bone (same readme), so the figure reads as a knight from across the board.
-  const head = body.getObjectByName('Head');
-  if (head) {
-    // The helmet is modelled around its own origin: place it in bind pose at the head centre,
-    // upright in model space, then express that in the bone's frame.
-    body.updateMatrixWorld(true);
-    const local = head.worldToLocal(new Vector3(0, 492, 4));
-    helmet.position.copy(local);
-    helmet.quaternion.copy(head.getWorldQuaternion(new Quaternion()).invert());
-    helmet.scale.setScalar(0.01);
-    head.add(helmet);
-  }
-  return { template: body, clips, height: 558 };
+  scene.updateMatrixWorld(true);
+  return { template: scene, clips, bounds: new Box3().setFromObject(scene) };
 }
 
 export interface CharacterMaterials {
-  /** Lacquer for the armour, matching the piece's side. */
+  /** Lacquer matching the piece's side. */
   body(color: Color): Material;
+  /** Gold trim (hooves, like the gold foot rings on every base). */
   accent(): Material;
+  /** Dark inlay for the eyes. */
+  eye(): Material;
 }
+
+/** Length of the horse nose-to-tail on the board, in squares. */
+const HORSE_LENGTH = 0.8;
+/** Top of the knight's turned base (Profile in pieces.ts). */
+const BASE_TOP = 0.255;
+/** Rearing pitch at its peak (radians). */
+const REAR = 0.62;
 
 interface Rig {
   readonly mixer: AnimationMixer;
   readonly actions: ReadonlyMap<ClipKey, AnimationAction>;
+  /** Rotates about the hind hooves to rear up. */
+  readonly pivot: Object3D;
+  /** The rider's lance: raised at rest, couched for the charge. */
+  readonly lance: Object3D;
   current: AnimationAction | null;
   /** Seconds until the current one-shot/loop should hand back to idle (<= 0: none). */
   hold: number;
+  /** Rear-up timeline (attack); duration 0 = not rearing. */
+  rearT: number;
+  rearDur: number;
   /** Pending base shatter (after the death clip has started). */
   shatterIn: number;
   shatterDuration: number;
@@ -110,8 +118,32 @@ export interface CharacterAnimator extends PieceAnimator {
   readonly count: number;
 }
 
-const OPPONENT_YAW: Record<Color, number> = { white: headingYaw(0, -1), black: headingYaw(0, 1) };
+/** Rest facing: three-quarter view toward the opponent, so the horse reads in profile like a figurine. */
+const REST_YAW: Record<Color, number> = { white: headingYaw(0, -1) + 0.7, black: headingYaw(0, 1) + 0.7 };
 const FADE = 0.18;
+
+/** Lance pitch over attack progress k: lower into the couch during the rear, hold through the strike, raise. */
+export function lanceAngle(k: number): number {
+  if (k <= 0 || k >= 1) return LANCE_REST;
+  const ease = (w: number): number => w * w * (3 - 2 * w);
+  const couch = k < 0.25 ? ease(k / 0.25) : k < 0.7 ? 1 : 1 - ease((k - 0.7) / 0.3);
+  return LANCE_REST + (LANCE_COUCHED - LANCE_REST) * couch;
+}
+
+/** Spine bone over the saddle that carries the rider. */
+const RIDER_BONE = 'Torso2';
+
+/** Rear angle over attack progress k: rise in the wind-up, slam down on the strike, settle. */
+export function rearAngle(k: number): number {
+  if (k <= 0 || k >= 1) return 0;
+  if (k < 0.3) return REAR * Math.sin((Math.PI / 2) * (k / 0.3));
+  if (k < 0.5) {
+    const w = (k - 0.3) / 0.2;
+    return REAR * (1 - w * w) - 0.06 * w; // hooves drive through the board line
+  }
+  const w = (k - 0.5) / 0.5;
+  return -0.06 * (1 - w) * Math.cos(Math.PI * 1.5 * w);
+}
 
 export function createCharacterAnimator(
   base: ProceduralAnimator,
@@ -119,18 +151,29 @@ export function createCharacterAnimator(
   mats: CharacterMaterials,
 ): CharacterAnimator {
   const rigs = new Map<Object3D, Rig>();
-  const skin = new MeshStandardMaterial({ color: 0xc89670, roughness: 0.7 });
-
   let kit: CharacterKit | null = null;
 
   const attach = (obj: Object3D): void => {
     if (!kit || rigs.has(obj) || obj.userData.type !== type) return;
     const color = obj.userData.color as Color;
-    const height = (obj.userData.height as number | undefined) ?? 0.8;
+    const b = kit.bounds;
+    const s = HORSE_LENGTH / (b.max.z - b.min.z);
+    const hindZ = b.min.z + 0.22 * (b.max.z - b.min.z); // hind hooves, a little in from the tail tip
+    const centreZ = (b.min.z + b.max.z) / 2;
+
     const ch = cloneSkinned(kit.template);
     ch.name = 'character';
-    ch.scale.setScalar((height * 1.08) / kit.height);
-    ch.rotation.y = Math.PI / 2; // character faces +z; the animator's piece forward is +x
+    ch.position.set(0, -b.min.y, -hindZ);
+    const pivot = new Group();
+    pivot.name = 'rear-pivot';
+    pivot.position.set(0, 0, (hindZ - centreZ) * s);
+    pivot.scale.setScalar(s);
+    pivot.add(ch);
+    const mount = new Group();
+    mount.name = 'mount';
+    mount.position.y = BASE_TOP;
+    mount.rotation.y = Math.PI / 2; // the horse faces +z; the animator's piece forward is +x
+    mount.add(pivot);
     ch.traverse((o) => {
       if (!(o as Mesh).isMesh) return;
       const m = o as SkinnedMesh;
@@ -138,31 +181,37 @@ export function createCharacterAnimator(
       m.receiveShadow = true;
       m.frustumCulled = false; // skinned bounds don't follow the clip
       const pick = (src: Material): Material => {
-        const n = src.name.toLowerCase();
-        if (n === 'skin') return skin;
-        if (n === 'armor' || n === 'metal' || n === 'darkgrey') return mats.body(color);
-        return mats.accent(); // boots, sword hilt/guard
+        const f = finishFor(src.name);
+        return f === 'accent' ? mats.accent() : f === 'eye' ? mats.eye() : mats.body(color);
       };
       m.material = Array.isArray(m.material) ? m.material.map(pick) : pick(m.material);
     });
-    // Hide the procedural knight but keep it as the object the base animator moves.
-    for (const c of obj.children) c.visible = false;
-    obj.add(ch);
-    // Rest facing: toward the opponent (sync() resets rotation to restYaw).
-    obj.userData.restYaw = OPPONENT_YAW[color];
-    obj.rotation.set(0, OPPONENT_YAW[color], 0);
+    // The rider sits on the saddle and rides the spine bone, so it follows every gallop and rear.
+    const rider = createRider({ armour: mats.body(color), trim: mats.accent(), dark: mats.eye() });
+    rider.root.position.copy(SADDLE);
+    ch.add(rider.root);
+    obj.add(mount);
+    obj.updateMatrixWorld(true);
+    (ch.getObjectByName(RIDER_BONE) ?? ch).attach(rider.root);
+    // Keep the knight's turned base and gold rings; hide the procedural head.
+    for (const c of obj.children) c.visible = c === mount || c.userData.base === true;
+    obj.userData.restYaw = REST_YAW[color];
+    obj.rotation.set(0, REST_YAW[color], 0);
     const mixer = new AnimationMixer(ch);
     const actions = new Map<ClipKey, AnimationAction>();
     for (const [k, clip] of kit.clips) actions.set(k, mixer.clipAction(clip));
-    const rig: Rig = { mixer, actions, current: null, hold: 0, shatterIn: -1, shatterDuration: 0, dead: false };
+    const rig: Rig = {
+      mixer, actions, pivot, lance: rider.lance, current: null, hold: 0, rearT: 0, rearDur: 0, shatterIn: -1, shatterDuration: 0, dead: false,
+    };
     rigs.set(obj, rig);
-    // Desynchronise idles like the procedural breathing does.
     fade(rig, 'idle', 0, 1);
-    rig.mixer.setTime(((obj.userData.phase as number | undefined) ?? 0) % 3);
+    rig.mixer.setTime(((obj.userData.phase as number | undefined) ?? 0) % 3); // desynchronise idles
   };
 
   const fade = (rig: Rig, key: ClipKey, fadeTime: number, timeScale: number, once = false): void => {
     const next = rig.actions.get(key)!;
+    // move and attack share a clip: restart it rather than cross-fading into itself.
+    if (rig.current === next) next.stop();
     next.reset();
     next.setLoop(once ? LoopOnce : LoopRepeat, Infinity);
     next.clampWhenFinished = once;
@@ -173,10 +222,18 @@ export function createCharacterAnimator(
     rig.current = next;
   };
 
+  const settle = (rig: Rig): void => {
+    rig.rearT = 0;
+    rig.rearDur = 0;
+    rig.pivot.rotation.x = 0;
+    rig.lance.rotation.x = LANCE_REST;
+  };
+
   const toIdle = (rig: Rig, fadeTime = FADE): void => {
     rig.hold = 0;
     rig.shatterIn = -1;
     rig.dead = false;
+    settle(rig);
     fade(rig, 'idle', fadeTime, 1);
   };
 
@@ -220,25 +277,26 @@ export function createCharacterAnimator(
       }
       if (clip === 'move') {
         const duration = params.duration ?? 0.5;
-        const dist = params.to ? obj.position.distanceTo(params.to) : 0;
-        const run = dist / Math.max(duration, 1e-3) > 2.2;
-        const key: ClipKey = run ? 'run' : 'move';
-        // Match the stride to ground speed (the clips are authored for roughly these speeds).
-        const strideSpeed = run ? 3.4 : 1.6;
-        fade(rig, key, FADE, Math.min(2.5, Math.max(0.7, dist / Math.max(duration, 1e-3) / strideSpeed)));
+        settle(rig);
+        // Take off at the start, land at the end of the hop.
+        fade(rig, 'move', 0.1, (clipLen('move') * JUMP_LAND) / Math.max(duration, 1e-3), true);
         rig.hold = duration;
-        base.play(obj, 'move', { ...params, hop: (params.hop ?? 0) * 0.35 }); // a leap, not a cartwheel
+        base.play(obj, 'move', { ...params, hop: (params.hop ?? 0) * 0.55 });
         return;
       }
       if (clip === 'attack') {
         const duration = params.duration ?? 0.5;
-        fade(rig, 'attack', 0.08, clipLen('attack') / duration, true);
+        // Forelegs tuck at the top of the rear (k = 0.3) and come down on the strike.
+        fade(rig, 'attack', 0.08, (clipLen('attack') * JUMP_PEAK) / Math.max(0.3 * duration, 1e-3), true);
+        rig.rearT = 0;
+        rig.rearDur = duration;
         rig.hold = duration;
         base.play(obj, 'attack', params);
         return;
       }
-      // shatter: fall over first, then burst into debris.
+      // shatter: collapse first, then burst into debris.
       const duration = params.duration ?? 0.6;
+      settle(rig);
       fade(rig, 'death', 0.06, clipLen('death') / (duration * 0.7), true);
       rig.dead = true;
       rig.shatterIn = duration * 0.55;
@@ -251,6 +309,7 @@ export function createCharacterAnimator(
         base.fall(obj, duration);
         return;
       }
+      settle(rig);
       fade(rig, 'death', 0.1, clipLen('death') / duration, true);
       rig.dead = true;
       rig.hold = duration;
@@ -261,6 +320,12 @@ export function createCharacterAnimator(
         if (rig.shatterIn >= 0) {
           rig.shatterIn -= dt;
           if (rig.shatterIn < 0) base.play(obj, 'shatter', { duration: rig.shatterDuration });
+        }
+        if (rig.rearDur > 0) {
+          rig.rearT = Math.min(rig.rearDur, rig.rearT + dt);
+          rig.pivot.rotation.x = -rearAngle(rig.rearT / rig.rearDur);
+          rig.lance.rotation.x = lanceAngle(rig.rearT / rig.rearDur);
+          if (rig.rearT >= rig.rearDur) settle(rig);
         }
         if (rig.hold > 0) {
           rig.hold -= dt;
@@ -279,6 +344,7 @@ export function createCharacterAnimator(
       for (const rig of rigs.values()) {
         rig.shatterIn = -1;
         rig.hold = 0;
+        settle(rig);
       }
     },
   };
