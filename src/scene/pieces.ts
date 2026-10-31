@@ -1,4 +1,5 @@
 import {
+  Box3,
   ConeGeometry,
   ExtrudeGeometry,
   Group,
@@ -256,6 +257,8 @@ export interface PieceLayer {
   readonly group: Group;
   /** Reconcile meshes to the board. Returns true if any piece moved, appeared or disappeared. */
   sync(board: Board): boolean;
+  /** Live mesh for a piece id (for the animator). */
+  get(id: string): Group | undefined;
   /** Swap geometry density + materials for a quality tier. Positions are unchanged. */
   setDetail(detail: Detail): void;
 }
@@ -270,12 +273,20 @@ export function createPieces(initialDetail: Detail = 'high'): PieceLayer {
   const make = (id: string, type: PieceType, color: Color): Group => {
     const obj = buildPiece(type, color, detail);
     obj.name = id;
-    obj.userData = { type, color };
+    let phase = 0;
+    for (let i = 0; i < id.length; i++) phase = (phase * 31 + id.charCodeAt(i)) % 6283;
+    obj.userData = {
+      type, color,
+      restYaw: obj.rotation.y, // the animator's neutral facing
+      phase: phase / 1000, // idle-sway offset so pieces don't breathe in lockstep
+      height: new Box3().setFromObject(obj).max.y,
+    };
     return obj;
   };
 
   return {
     group,
+    get: (id) => meshes.get(id),
     sync(board) {
       let changed = false;
       const alive = new Set<string>();
@@ -294,6 +305,10 @@ export function createPieces(initialDetail: Detail = 'high'): PieceLayer {
           group.add(obj);
           changed = true;
         }
+        // Back to the rest pose (an animation or a toppled king may have left it otherwise).
+        obj.visible = true;
+        obj.scale.set(1, 1, 1);
+        obj.rotation.set(0, obj.userData.restYaw as number, 0);
         squareToWorld(sq, tmp);
         if (!obj.position.equals(tmp)) {
           obj.position.copy(tmp);
@@ -314,6 +329,8 @@ export function createPieces(initialDetail: Detail = 'high'): PieceLayer {
       for (const [id, old] of meshes) {
         const obj = make(id, old.userData.type as PieceType, old.userData.color as Color);
         obj.position.copy(old.position);
+        obj.quaternion.copy(old.quaternion);
+        obj.visible = old.visible;
         group.remove(old);
         group.add(obj);
         meshes.set(id, obj);
