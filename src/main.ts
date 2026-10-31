@@ -1,11 +1,11 @@
-import { Color, DirectionalLight, Fog, HemisphereLight, PerspectiveCamera, Scene, Timer, Vector3 } from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { Color, DirectionalLight, Fog, HemisphereLight, PerspectiveCamera, Scene, Timer } from 'three';
+import { createCameraRig, type Preset } from './render/camera';
 import { createRenderer } from './render/renderer';
 import { loadEnvironment } from './render/env';
 import { createPost } from './render/post';
 import { createQualityGovernor, parseTier } from './render/quality';
 import { createBoard } from './scene/board';
-import { createHall } from './scene/hall';
+import { createHall, hallColliders } from './scene/hall';
 import { detailForTier } from './scene/materials';
 import { createPieces } from './scene/pieces';
 import { applyMove, initialState, legalMoves, outcome, parseUci, toFen, type GameState } from './game';
@@ -15,6 +15,7 @@ import { createWorkerPort } from './ai/workerPort';
 const HDRI_URL = `${import.meta.env.BASE_URL}hdri/sepulchral_chapel_rotunda_1k.hdr`;
 const BUDGET_MS = 1000 / 60;
 const AI_COLOR = 'black';
+const PRESET_KEYS: Record<string, Preset> = { '1': 'player', '2': 'overhead', '3': 'side', '4': 'overview' };
 
 async function main(): Promise<void> {
   const hud = document.getElementById('hud')!;
@@ -31,18 +32,8 @@ async function main(): Promise<void> {
   // Default view: behind White, ~38 degrees above the board. `?cam=x,y,z` overrides (screenshots).
   const camera = new PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 120);
   const camParam = params.get('cam')?.split(',').map(Number);
-  const camPos = camParam?.length === 3 && camParam.every(Number.isFinite) ? new Vector3(...(camParam as [number, number, number])) : new Vector3(0, 8.6, 11.0);
-  camera.position.copy(camPos);
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.set(0, -0.2, 0.4);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-  controls.enablePan = false;
-  controls.minDistance = 5;
-  controls.maxDistance = 20;
-  controls.minPolarAngle = 0.12;
-  controls.maxPolarAngle = 1.25; // never below ~18 degrees above the board plane
-  controls.update();
+  const camStart = camParam?.length === 3 && camParam.every(Number.isFinite) ? (camParam as [number, number, number]) : 'player';
+  const rig = createCameraRig(camera, renderer.domElement, hallColliders(), camStart);
 
   const env = await loadEnvironment(renderer, HDRI_URL);
   scene.environment = env;
@@ -149,6 +140,7 @@ async function main(): Promise<void> {
     if (e.key === ' ' || e.key === 'm' || e.key === 'Enter') humanMove();
     else if (e.key === 'u') undo();
     else if (e.key === 'r') reset();
+    else if (PRESET_KEYS[e.key]) void rig.flyTo(PRESET_KEYS[e.key]!, 900);
   });
 
   // ---- quality + render loop -------------------------------------------------
@@ -170,7 +162,7 @@ async function main(): Promise<void> {
   const frame = (ts: number): void => {
     timer.update(ts);
     const dt = timer.getDelta();
-    controls.update();
+    rig.update(dt);
     if (governor) {
       const next = governor.sample(dt * 1000);
       if (next) {
@@ -195,7 +187,7 @@ async function main(): Promise<void> {
         (lastEval !== null ? ` eval ${lastEval}cp` : '') +
         (lastError ? ` · error: ${lastError}` : '') +
         (end ? ` · ${end}` : '') +
-        ` · ${game.turn} to move · click/space = move, u = undo, r = reset`;
+        ` · ${game.turn} to move · click/space = move, u = undo, r = reset, 1-4 = camera`;
     }
     requestAnimationFrame(frame);
   };

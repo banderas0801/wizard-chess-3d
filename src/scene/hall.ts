@@ -41,6 +41,17 @@ function pbr(loader: TextureLoader, name: string, repeat: Vector2, anisotropy: n
 }
 
 /** A column: square-ish plinth, torus mouldings, slightly tapered shaft, flared capital. */
+/** Hall layout, shared with the camera's anti-clip colliders. */
+export const HALL = { columns: 10, ringRadius: 14, columnRadius: 0.62 * 1.55, columnHeight: 11 } as const;
+
+/** Upright cylinders the camera must stay out of (columns). Declared, not raycast. */
+export function hallColliders(): { x: number; z: number; radius: number; yMin: number; yMax: number }[] {
+  return Array.from({ length: HALL.columns }, (_, i) => {
+    const a = ((i + 0.5) / HALL.columns) * Math.PI * 2;
+    return { x: Math.cos(a) * HALL.ringRadius, z: Math.sin(a) * HALL.ringRadius, radius: HALL.columnRadius, yMin: FLOOR_Y, yMax: FLOOR_Y + HALL.columnHeight };
+  });
+}
+
 function columnProfile(height: number): Profile {
   const r = 0.62;
   return new Profile()
@@ -87,15 +98,15 @@ export function createHall(anisotropy: number, lowDetail = false): Hall {
   group.add(floor);
 
   const stone = pbr(loader, 'large_sandstone_blocks_01', new Vector2(3, 5), anisotropy, '#d6c4a6');
-  const H = 11;
+  const H = HALL.columnHeight;
   const colGeo = new LatheGeometry(columnProfile(H).points, lowDetail ? 20 : 48);
   const flameMat = new MeshBasicMaterial({ color: new Color(3, 1.3, 0.4), toneMapped: false });
   const glowMat = new MeshBasicMaterial({ color: new Color(1, 0.45, 0.12), transparent: true, opacity: 0.18, blending: AdditiveBlending, depthWrite: false });
   const bowl = new CylinderGeometry(0.28, 0.12, 0.22, 24, 1, true);
   const bowlMat = new MeshStandardMaterial({ color: '#3a2a1a', metalness: 0.8, roughness: 0.45, side: BackSide });
   const bowlOut = new MeshStandardMaterial({ color: '#b08440', metalness: 1, roughness: 0.35 });
-  const N = 10;
-  const R = 14;
+  const N = HALL.columns;
+  const R = HALL.ringRadius;
   for (let i = 0; i < N; i++) {
     const a = ((i + 0.5) / N) * Math.PI * 2;
     const x = Math.cos(a) * R;
