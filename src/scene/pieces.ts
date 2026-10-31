@@ -26,6 +26,8 @@ interface Part {
   readonly geo: BufferGeometry;
   readonly finish: Finish;
   readonly matrix?: Matrix4;
+  /** Turned base (foot + rings): stays visible when a character stands on it. */
+  readonly base?: true;
 }
 
 interface Res {
@@ -212,9 +214,9 @@ function knight(r: Res): Part[] {
   const eyeZ = (depth / 2 + 0.035) * taper(0.09, 0.62);
   const noseZ = (depth / 2 + 0.03) * taper(0.27, 0.41);
   return [
-    { geo: lathe(base, r), finish: 'body' },
-    footRing(0.31, 0.15, r),
-    ring(0.212, 0.25, 0.012, r),
+    { geo: lathe(base, r), finish: 'body', base: true },
+    { ...footRing(0.31, 0.15, r), base: true },
+    { ...ring(0.212, 0.25, 0.012, r), base: true },
     { geo: head, finish: 'body' },
     { geo: mane, finish: 'gold' },
     ball(0.022, 0.62, r, 0.09, eyeZ),
@@ -242,6 +244,7 @@ function buildPiece(type: PieceType, color: Color, detail: Detail): Group {
   for (const part of pieceParts(type, detail)) {
     const mesh = new Mesh(part.geo, part.finish === 'gold' ? mats.gold : body);
     if (part.matrix) mesh.applyMatrix4(part.matrix);
+    if (part.base) mesh.userData.base = true;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     g.add(mesh);
