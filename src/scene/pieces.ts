@@ -228,6 +228,34 @@ function knight(r: Res): Part[] {
 
 const BUILDERS: Record<PieceType, (r: Res) => Part[]> = { pawn, rook, bishop, queen, king, knight };
 
+/** Height of the pawn's character pedestal top (where a rigged figure's soles stand). */
+export const PAWN_PEDESTAL_TOP = 0.2;
+
+/** Low turned pedestal for a rigged pawn figure: the pawn's own foot, a flat top and a gold rim. */
+function pawnPedestal(r: Res): Part[] {
+  const top = PAWN_PEDESTAL_TOP;
+  const p = new Profile().foot(0.27, 0.14, 0.17).curve([[0.18, 0.17], [0.19, top - 0.015]], 6).to(0.19, top).corner().to(0, top);
+  return [{ geo: lathe(p, r), finish: 'body' }, footRing(0.27, 0.14, r), ring(0.192, top - 0.006, 0.011, r)];
+}
+
+const pedestalCache = new Map<Detail, Part[]>();
+/** A pawn character's pedestal (separate from the procedural pawn, which keeps its own silhouette). */
+export function buildPawnPedestal(color: Color, detail: Detail): Group {
+  let parts = pedestalCache.get(detail);
+  if (!parts) pedestalCache.set(detail, (parts = pawnPedestal(RES[detail])));
+  const mats = getMaterials(detail);
+  const g = new Group();
+  g.name = 'pedestal';
+  for (const part of parts) {
+    const mesh = new Mesh(part.geo, part.finish === 'gold' ? mats.gold : color === 'white' ? mats.ivory : mats.ebony);
+    if (part.matrix) mesh.applyMatrix4(part.matrix);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    g.add(mesh);
+  }
+  return g;
+}
+
 const partCache = new Map<string, Part[]>();
 /** Geometry is shared by every piece of a type at a given detail; never disposed per piece. */
 export function pieceParts(type: PieceType, detail: Detail): readonly Part[] {
