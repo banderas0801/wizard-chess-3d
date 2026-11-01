@@ -85,7 +85,10 @@ async function main(): Promise<void> {
   let lastEval: number | null = null;
   let lastError = '';
   let tier: QualityTier = startTier;
-  const toggles = { shake: true, closeUp: true };
+  // `zen`: future Zen mode; for now it only turns camera shake off (`?zen=1` or the z key).
+  const toggles = { shake: true, closeUp: true, zen: params.get('zen') === '1' };
+  /** Shake is off at tier off and in Zen mode, whatever the s toggle says. */
+  const shakeAllowed = (): boolean => toggles.shake && !toggles.zen && tier !== 'off';
   const FRAGMENTS: Record<QualityTier, number> = { high: 18, low: 10, off: 5 };
 
   const proc = createProceduralAnimator({ fragments: FRAGMENTS[startTier] });
@@ -142,7 +145,7 @@ async function main(): Promise<void> {
       lastError = '';
       show();
     },
-    toggles: () => ({ shake: toggles.shake && tier !== 'off', closeUp: toggles.closeUp && tier !== 'off' }),
+    toggles: () => ({ shake: shakeAllowed(), closeUp: toggles.closeUp && tier !== 'off' }),
     effect(cue, moverId, at) {
       if (cue.kind === 'shake') {
         const k = SHAKE_SCALE[tier];
@@ -269,6 +272,7 @@ async function main(): Promise<void> {
     else if (e.key === 'u') undo();
     else if (e.key === 'r') reset();
     else if (e.key === 's') toggles.shake = !toggles.shake;
+    else if (e.key === 'z') toggles.zen = !toggles.zen;
     else if (e.key === 'c') toggles.closeUp = !toggles.closeUp;
     else if (PRESET_KEYS[e.key]) void rig.flyTo(PRESET_KEYS[e.key]!, 900);
   });
@@ -300,6 +304,7 @@ async function main(): Promise<void> {
     fx.update(adt);
     // Shadows follow moving pieces every frame, and stop again once everything is still.
     if (choreo.animating || animator.moving) markShadowsDirty('piece-move');
+    rig.shakeEnabled = shakeAllowed();
     rig.update(dt);
     if (governor) {
       const next = governor.sample(dt * 1000);
@@ -330,7 +335,7 @@ async function main(): Promise<void> {
         (lastEval !== null ? ` eval ${lastEval}cp` : '') +
         (lastError ? ` · error: ${lastError}` : '') +
         (end ? ` · ${end}` : '') +
-        ` · ${game.turn} to move · click/space = move, u = undo, r = reset, 1-4 = camera, s/c = shake ${toggles.shake ? 'on' : 'off'}/close-up ${toggles.closeUp ? 'on' : 'off'}`;
+        ` · ${game.turn} to move · click/space = move, u = undo, r = reset, 1-4 = camera, s/c/z = shake ${toggles.shake ? 'on' : 'off'}/close-up ${toggles.closeUp ? 'on' : 'off'}/zen ${toggles.zen ? 'on' : 'off'}`;
     }
     requestAnimationFrame(frame);
   };
