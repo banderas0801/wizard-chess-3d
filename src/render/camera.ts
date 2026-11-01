@@ -15,7 +15,7 @@ export const PRESETS: Readonly<Record<Preset, { readonly pos: V3; readonly targe
   player: { pos: [0, 8.6, 11.0], target: [0, -0.2, 0.4] },
   overhead: { pos: [0, 14, 2.2], target: [0, 0, 0.1] },
   side: { pos: [12.5, 5.8, 0], target: [0, -0.2, 0] },
-  overview: { pos: [8.5, 10.5, 12.5], target: [0, -0.2, 0] },
+  overview: { pos: [6.4, 8.2, 9.4], target: [0, -0.2, 0] },
 };
 
 export interface Cylinder {
@@ -54,15 +54,29 @@ export function clipDistance(target: Vector3, dir: Vector3, len: number, cylinde
   return best;
 }
 
+/** How close a focus shot comes in: horizontal distance and height above the point, and the look-at lift. */
+export interface FocusShot {
+  readonly distance: number;
+  readonly height: number;
+  readonly lookAt: number;
+}
+export const CAPTURE_SHOT: FocusShot = { distance: 3.4, height: 2.6, lookAt: 0.35 };
+/** Low and tight on the mated king as it falls. */
+export const MATE_SHOT: FocusShot = { distance: 2.3, height: 1.15, lookAt: 0.25 };
+export const SHAKE_MS = 300;
+
 export interface CameraRig {
   readonly controls: CameraControls;
   /** Eased flight to a preset; resolves when it arrives. */
   flyTo(preset: Preset, ms?: number): Promise<void>;
-  /** Eased flight to look at a world point from close by (capture close-up). */
-  focus(point: Vector3, ms?: number): Promise<void>;
+  /** Eased flight to look at a world point from close by (capture or checkmate close-up). */
+  focus(point: Vector3, ms?: number, shot?: FocusShot): Promise<void>;
   /** Fly back to where the camera was before `focus`. */
   unfocus(ms?: number): Promise<void>;
+  /** Light decaying shake (default 0.3 s). A no-op while `shakeEnabled` is false. */
   shake(strength: number, ms?: number): void;
+  /** Master switch for shake (default on). Off for Zen mode; the app also keeps it off at tier `off`. */
+  shakeEnabled: boolean;
   /** Call once per frame after nothing else touches the camera. */
   update(dt: number): void;
   readonly preset: Preset | null;
@@ -117,14 +131,15 @@ export function createCameraRig(camera: PerspectiveCamera, dom: HTMLElement, col
       saved = null;
       return fly(PRESETS[p].pos, PRESETS[p].target, ms);
     },
-    focus(point, ms = 450) {
+    shakeEnabled: true,
+    focus(point, ms = 450, shot = CAPTURE_SHOT) {
       controls.getPosition(tmpP, true);
       controls.getTarget(tmpT, true);
       saved ??= { pos: v3(tmpP), target: v3(tmpT), preset };
       // Come in along the current viewing direction, low and close.
       dir.copy(tmpP).sub(tmpT).setY(0).normalize();
-      const pos: V3 = [point.x + dir.x * 3.4, point.y + 2.6, point.z + dir.z * 3.4];
-      return fly(pos, [point.x, point.y + 0.35, point.z], ms);
+      const pos: V3 = [point.x + dir.x * shot.distance, point.y + shot.height, point.z + dir.z * shot.distance];
+      return fly(pos, [point.x, point.y + shot.lookAt, point.z], ms);
     },
     unfocus(ms = 600) {
       if (!saved) return Promise.resolve();
@@ -133,7 +148,8 @@ export function createCameraRig(camera: PerspectiveCamera, dom: HTMLElement, col
       preset = s.preset;
       return fly(s.pos, s.target, ms);
     },
-    shake(strength, ms = 260) {
+    shake(strength, ms = SHAKE_MS) {
+      if (!this.shakeEnabled) return;
       shakeStrength = Math.max(shakeStrength * (shakeLeft / shakeTotal), strength);
       shakeLeft = shakeTotal = ms / 1000;
     },
@@ -142,12 +158,14 @@ export function createCameraRig(camera: PerspectiveCamera, dom: HTMLElement, col
       controls.update(dt);
       if (controls.currentAction !== CameraControls.ACTION.NONE) preset = null;
       // Rebuild the pose from the controls' own state every frame so our offsets never accumulate.
-      controls.getPosition(tmpP);
-      controls.getTarget(tmpT);
+      // `false` = the current (eased) pose; the default would read the flight's END pose and snap.
+      controls.getPosition(tmpP, false);
+      controls.getTarget(tmpT, false);
       dir.copy(tmpP).sub(tmpT);
       const len = dir.length();
       dir.divideScalar(len || 1);
       camera.position.copy(tmpT).addScaledVector(dir, clipDistance(tmpT, dir, len, colliders));
+      if (!this.shakeEnabled) shakeLeft = 0;
       if (shakeLeft > 0) {
         shakeLeft = Math.max(0, shakeLeft - dt);
         const k = shakeStrength * (shakeLeft / shakeTotal) ** 2;
