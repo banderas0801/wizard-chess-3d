@@ -18,14 +18,13 @@ describe('QualityGovernor (Hysteresis Frame Rate Regulator)', () => {
     const gov = createQualityGovernor({ budgetMs: 16.67, nowFn: mockNow });
 
     let changedTier = null;
-    // Bơm 29 frame chậm (25ms) -> chưa đủ 30 frame
     for (let i = 0; i < 29; i++) {
       virtualTime += 25;
       changedTier = gov.sample(25);
       expect(changedTier).toBeNull();
     }
 
-    // Frame thứ 30 chậm -> hạ xuống 'low'
+    // Frame thứ 30
     virtualTime += 25;
     changedTier = gov.sample(25);
     expect(changedTier).toBe('low');
@@ -56,21 +55,20 @@ describe('QualityGovernor (Hysteresis Frame Rate Regulator)', () => {
       nowFn: mockNow
     });
 
-    // 1. Gây lag để hạ xuống 'low' tại t = 750ms
+    // 1. Hạ tier tại t = 750ms
     for (let i = 0; i < 30; i++) {
       virtualTime += 25;
       gov.sample(25);
     }
     expect(gov.getCurrentTier()).toBe('low');
 
-    // 2. Chạy 5 giây cực mượt (10ms < 11.67ms) nhưng chỉ mới qua 5.75s kể từ lúc hạ
+    // 2. Chạy 5 giây mượt (500 frame * 10ms = 5000ms), tổng thời gian = 750 + 5000 = 5750ms (< 10000ms)
     let changedTier = null;
-    for (let i = 0; i < 500; i++) { // 500 * 10ms = 5000ms
+    for (let i = 0; i < 500; i++) {
       virtualTime += 10;
       changedTier = gov.sample(10);
     }
 
-    // Vẫn chưa qua 10s kể từ lúc hạ (t = 750 + 5000 = 5750ms < 10000ms)
     expect(changedTier).toBeNull();
     expect(gov.getCurrentTier()).toBe('low');
   });
@@ -91,11 +89,11 @@ describe('QualityGovernor (Hysteresis Frame Rate Regulator)', () => {
       gov.sample(10);
     }
 
-    // Xuất hiện 1 frame lag (15ms > 11.67ms) làm reset chuỗi liên tục
+    // 1 frame lag (15ms > 11.67ms) làm reset bộ đếm mượt liên tục
     virtualTime += 15;
     gov.sample(15);
 
-    // Chạy thêm 1 giây nữa (tổng cộng 5.5s nhưng không liên tục)
+    // Chạy thêm 1 giây nữa (chưa đủ 5 giây liên tục mới)
     let changedTier = null;
     for (let i = 0; i < 100; i++) {
       virtualTime += 10;
@@ -124,7 +122,7 @@ describe('QualityGovernor (Hysteresis Frame Rate Regulator)', () => {
     virtualTime += 6000;
 
     // 3. Bây giờ chạy mượt liên tục 5 giây (500 frames @ 10ms)
-    // Tại cuối chu kỳ này, tổng thời gian = 750 + 6000 + 5000 = 11750ms (> 10s kể từ lần hạ)
+    // Tại frame thứ 500, smoothDurationMs = 5000ms VÀ totalTime = 750 + 6000 + 5000 = 11750ms (> 10s)
     let changedTier = null;
     for (let i = 0; i < 500; i++) {
       virtualTime += 10;

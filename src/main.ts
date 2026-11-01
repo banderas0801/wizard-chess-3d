@@ -3,9 +3,12 @@ import { createRenderer } from './render/renderer';
 import { loadEnvironment } from './render/env';
 import { createPost, QualityTier } from './render/post';
 import { createQualityGovernor } from './render/quality';
+import { ChessCameraController } from './render/camera';
 import { createChessBoard } from './scene/board';
 import { PieceManager, Piece3D } from './scene/pieces';
-import { createInitialGameState, getLegalMoves, Square } from './game';
+import { ProceduralPieceAnimator } from './scene/anim';
+import { MoveChoreographer, ChoreoParticipant } from './scene/choreo';
+import { createInitialGameState, getLegalMoves, Square, Move } from './game';
 
 const container = document.getElementById('canvas-container')!;
 const tierBadge = document.getElementById('tier-badge')!;
@@ -16,13 +19,24 @@ scene.background = new THREE.Color(0x07090e);
 scene.fog = new THREE.FogExp2(0x07090e, 0.02);
 
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 80);
-camera.position.set(0, 13, 14);
-camera.lookAt(0, 0, 0);
+camera.position.set(0, 11, 14);
 
 // 2. Renderer
 const renderer = createRenderer({ container });
 
-// 3. Environment & Lighting
+// 3. Camera Controller (OrbitControls + 4 Presets + Chống xuyên cột)
+const cameraController = new ChessCameraController(camera, renderer.domElement);
+// Khai báo 6 cây cột vòm đá của giáo đường làm chướng ngại vật chống xuyên
+cameraController.addObstacles([
+  { x: -5.5, z: -8, radius: 0.85, maxY: 14 },
+  { x: 5.5, z: -8, radius: 0.85, maxY: 14 },
+  { x: -5.5, z: 0, radius: 0.85, maxY: 14 },
+  { x: 5.5, z: 0, radius: 0.85, maxY: 14 },
+  { x: -5.5, z: 8, radius: 0.85, maxY: 14 },
+  { x: 5.5, z: 8, radius: 0.85, maxY: 14 }
+]);
+
+// 4. Environment & Lighting
 const sunLight = new THREE.DirectionalLight(0xfff0ba, 2.2);
 sunLight.position.set(4, 12, 5);
 sunLight.castShadow = true;
@@ -39,19 +53,23 @@ scene.add(sunLight);
 const ambientLight = new THREE.AmbientLight(0x1e293b, 0.8);
 scene.add(ambientLight);
 
-// Nạp HDRI CC0 Poly Haven (chạy 1 lần duy nhất lúc khởi động)
 loadEnvironment(renderer, '/hdri/cathedral_atrium_1k.hdr').then(({ envMap }) => {
   scene.environment = envMap;
   renderer.shadowMap.needsUpdate = true;
 });
 
-// 4. Bàn cờ & Quân cờ
+// 5. Bàn cờ & Quản lý quân cờ
 const board = createChessBoard();
 scene.add(board.group);
 
 const pieceManager = new PieceManager();
 const gameState = createInitialGameState();
-const piecesMap = new Map<string, Piece3D>();
+
+interface ExtendedPiece {
+  piece3D: Piece3D;
+  animator: ProceduralPieceAnimator;
+}
+const piecesMap = new Map<string, ExtendedPiece>();
 
 for (let r = 0; r < 8; r++) {
   for (let c = 0; c < 8; c++) {
@@ -61,12 +79,16 @@ for (let r = 0; r < 8; r++) {
       const worldPos = board.getTileWorldPosition(r, c);
       piece3D.mesh.position.copy(worldPos);
       scene.add(piece3D.mesh);
-      piecesMap.set(`${r},${c}`, piece3D);
+
+      const animator = new ProceduralPieceAnimator(piece3D.mesh, scene);
+      animator.play('idle');
+
+      piecesMap.set(`${r},${c}`, { piece3D, animator });
     }
   }
 }
 
-// 5. Post-Processing Pipeline & Quality Governor
+// 6. Post-Processing & Quality Governor
 const post = createPost(renderer, scene, camera);
 const governor = createQualityGovernor({ budgetMs: 16.67, initialTier: post.getTier() });
 
@@ -76,12 +98,42 @@ function updateTierUI(tier: QualityTier) {
 }
 updateTierUI(post.getTier());
 
-// 6. Tương tác click chọn quân & di chuyển
+// 7. Move Choreographer (Bộ điều phối chuyển động & đòn đánh đặc trưng)
+let isSelectionLocked = false;
+
+const choreo = new MoveChoreographer({
+  renderer,
+  gameState,
+  getTier: () => post.getTier(),
+  onFenChange: (newFen) => {
+    console.log('[FEN Updated]:', newFen);
+  },
+  onLockSelection: (locked) => {
+    isSelectionLocked = locked;
+  },
+  onScreenShake: (intensity) => {
+    const origY = camera.position.y;
+    let count = 4;
+    const interval = setInterval(() => {
+      if (count <= 0) {
+        clearInterval(interval);
+        camera.position.y = origY;
+      } else {
+        camera.position.y = origY + (Math.random() - 0.5) * intensity;
+        count--;
+      }
+    }, 30);
+  }
+});
+
+// 8. Tương tác click chuột
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 let selectedSquare: Square | null = null;
 
 window.addEventListener('click', (event) => {
+  if (isSelectionLocked) return; // Chỉ khóa chọn nước mới, không khóa Undo
+
   const rect = renderer.domElement.getBoundingClientRect();
   mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -112,27 +164,46 @@ function handleTileClick(r: number, c: number) {
     if (isMove) {
       const fromKey = `${selectedSquare.r},${selectedSquare.c}`;
       const toKey = `${r},${c}`;
-      const movingPiece = piecesMap.get(fromKey);
 
-      if (movingPiece) {
-        // Nếu có quân bị ăn -> xóa mesh
-        const capturedPiece = piecesMap.get(toKey);
-        if (capturedPiece) {
-          scene.remove(capturedPiece.mesh);
-          piecesMap.delete(toKey);
+      const attackerExt = piecesMap.get(fromKey);
+      const victimExt = piecesMap.get(toKey);
+
+      if (attackerExt) {
+        const p = gameState.board[selectedSquare.r]![selectedSquare.c]!;
+        const capturedP = gameState.board[r]![c] || null;
+
+        const move: Move = {
+          from: { r: selectedSquare.r, c: selectedSquare.c },
+          to: { r, c },
+          piece: p,
+          captured: capturedP
+        };
+
+        const targetWorldPos = board.getTileWorldPosition(r, c);
+
+        const attackerPart: ChoreoParticipant = {
+          mesh: attackerExt.piece3D.mesh,
+          animator: attackerExt.animator,
+          originWorldPos: attackerExt.piece3D.mesh.position.clone(),
+          targetWorldPos
+        };
+
+        let victimPart: ChoreoParticipant | undefined;
+        if (victimExt) {
+          victimPart = {
+            mesh: victimExt.piece3D.mesh,
+            animator: victimExt.animator,
+            originWorldPos: victimExt.piece3D.mesh.position.clone(),
+            targetWorldPos: victimExt.piece3D.mesh.position.clone()
+          };
         }
 
+        // Bắt đầu chuỗi hoạt cảnh qua Choreo
+        choreo.executeMove(move, attackerPart, victimPart);
+
+        // Cập nhật vị trí trong map
         piecesMap.delete(fromKey);
-        piecesMap.set(toKey, movingPiece);
-
-        // Cập nhật logic state
-        gameState.board[r]![c] = gameState.board[selectedSquare.r]![selectedSquare.c];
-        gameState.board[selectedSquare.r]![selectedSquare.c] = null;
-        gameState.turn = gameState.turn === 'w' ? 'b' : 'w';
-
-        // Di chuyển 3D mượt mà kèm shadow.needsUpdate = true
-        const targetPos = board.getTileWorldPosition(r, c);
-        movingPiece.moveTo(targetPos, renderer);
+        piecesMap.set(toKey, attackerExt);
       }
 
       selectedSquare = null;
@@ -148,29 +219,43 @@ function handleTileClick(r: number, c: number) {
   }
 }
 
-// 7. Vòng lặp requestAnimationFrame với Quality Governor
+// 9. Vòng lặp Render với Choreo, CameraController & Quality Governor
 let lastTime = performance.now();
 
 function animate(currentTime: number) {
   requestAnimationFrame(animate);
 
   const deltaMs = currentTime - lastTime;
+  const deltaSec = deltaMs / 1000;
   lastTime = currentTime;
 
-  // Điều tiết chất lượng dựa trên frame time
+  // Cập nhật chuyển động bay & chống xuyên cột
+  cameraController.update(deltaSec);
+
+  // Cập nhật chuỗi hoạt cảnh di chuyển & giao chiến
+  choreo.update(deltaSec);
+
+  // Cập nhật nhịp thở idle của toàn bộ quân cờ
+  for (const ext of piecesMap.values()) {
+    if (choreo.state === 'idle') {
+      ext.animator.update(deltaSec);
+    }
+  }
+
+  // Điều tiết chất lượng
   const newTier = governor.sample(deltaMs);
   if (newTier) {
     post.setTier(newTier);
     updateTierUI(newTier);
   }
 
-  // Render qua Pipeline
-  post.render(deltaMs / 1000);
+  // Render hậu kỳ
+  post.render(deltaSec);
 }
 
 requestAnimationFrame(animate);
 
-// 8. Resize Handler
+// 10. Resize
 window.addEventListener('resize', () => {
   const w = window.innerWidth;
   const h = window.innerHeight;

@@ -8,7 +8,7 @@ export type PieceColor = 'w' | 'b';
 export interface Piece {
   type: PieceType;
   color: PieceColor;
-  hasMoved?: boolean;
+  hasMoved?: boolean | undefined;
 }
 
 export type Board = (Piece | null)[][]; // 8x8 grid (0,0 = a8, 7,7 = h1)
@@ -23,9 +23,9 @@ export interface Move {
   to: Square;
   piece: Piece;
   captured: Piece | null;
-  promotion?: PieceType;
-  isCastling?: boolean;
-  isEnPassant?: boolean;
+  promotion?: PieceType | undefined;
+  isCastling?: boolean | undefined;
+  isEnPassant?: boolean | undefined;
 }
 
 export interface GameState {

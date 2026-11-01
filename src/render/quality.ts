@@ -14,9 +14,9 @@ export interface QualityGovernor {
 
 /**
  * Bộ điều tiết hiệu năng thông minh (Hysteresis Quality Governor)
- * Quy tắc:
+ * Quy tắc chuẩn:
  * 1. Hạ tier khi trung bình 30 frame gần nhất > budgetMs * 1.2
- * 2. Chỉ nâng tier khi frameMs < budgetMs * 0.7 liên tục trong 5 giây VÀ đã qua tối thiểu 10 giây kể từ lần hạ gần nhất
+ * 2. Chỉ nâng tier khi frameMs < budgetMs * 0.7 liên tục tích lũy đủ 5 giây VÀ đã qua tối thiểu 10 giây kể từ lần hạ gần nhất
  */
 export function createQualityGovernor(options: QualityGovernorOptions = {}): QualityGovernor {
   const budgetMs = options.budgetMs ?? 16.67;
@@ -32,11 +32,10 @@ export function createQualityGovernor(options: QualityGovernorOptions = {}): Qua
   const WINDOW_SIZE = 30;
 
   // Thời điểm hạ tier gần nhất
-  let lastDowngradeTime: number = -Infinity;
+  let lastDowngradeTime = -Infinity;
 
-  // Thời gian tích lũy mượt liên tục (ms)
-  let smoothDurationMs: number = 0;
-  let lastSampleTime: number = now();
+  // Thời gian tích lũy mượt liên tục (ms) tính theo frameMs thực tế
+  let smoothDurationMs = 0;
 
   function getAverage(arr: number[]): number {
     if (arr.length === 0) return 0;
@@ -78,12 +77,9 @@ export function createQualityGovernor(options: QualityGovernorOptions = {}): Qua
       frameWindow.length = 0;
       lastDowngradeTime = -Infinity;
       smoothDurationMs = 0;
-      lastSampleTime = now();
     },
     sample: (frameMs: number): QualityTier | null => {
       const currentTime = now();
-      const deltaElapsed = Math.max(0, currentTime - lastSampleTime);
-      lastSampleTime = currentTime;
 
       // 1. Thêm vào cửa sổ 30 frame
       frameWindow.push(frameMs);
@@ -91,7 +87,7 @@ export function createQualityGovernor(options: QualityGovernorOptions = {}): Qua
         frameWindow.shift();
       }
 
-      // 2. Kiểm tra điều kiện HẠ TIER
+      // 2. Kiểm tra điều kiện HẠ TIER (trung bình 30 frame > budgetMs * 1.2)
       if (frameWindow.length === WINDOW_SIZE) {
         const avg = getAverage(frameWindow);
         if (avg > dropThreshold && currentTier !== 'off') {
@@ -99,18 +95,19 @@ export function createQualityGovernor(options: QualityGovernorOptions = {}): Qua
         }
       }
 
-      // 3. Kiểm tra điều kiện NÂNG TIER
+      // 3. Kiểm tra điều kiện NÂNG TIER (Hysteresis)
       if (currentTier !== 'high') {
         const timeSinceDowngrade = currentTime - lastDowngradeTime;
 
         if (frameMs < upgradeThreshold) {
-          smoothDurationMs += deltaElapsed;
-          // Chỉ nâng khi < budgetMs * 0.7 liên tục 5s (5000ms) VÀ đã qua 10s (10000ms) kể từ lần hạ
+          // Tích lũy đúng frameMs mượt thực tế
+          smoothDurationMs += frameMs;
+          // Chỉ nâng khi tích lũy đủ 5000ms mượt liên tục VÀ thời gian thực tế đã qua >= 10000ms kể từ lần hạ
           if (smoothDurationMs >= 5000 && timeSinceDowngrade >= 10000) {
             return upgrade();
           }
         } else {
-          // Bị gián đoạn -> reset thời gian tích lũy mượt
+          // Bị gián đoạn bởi frame lag -> reset bộ đếm liên tục
           smoothDurationMs = 0;
         }
       }
