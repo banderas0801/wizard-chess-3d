@@ -6,6 +6,7 @@ import { createPost } from './render/post';
 import { createQualityGovernor, parseTier, type QualityTier } from './render/quality';
 import { createProceduralAnimator } from './scene/anim';
 import { createCharacterAnimator, loadCharacterKit } from './scene/character';
+import { createFigureAnimator, loadFigureKit } from './scene/figure';
 import { createChoreographer } from './scene/choreo';
 import { createStrikeFx, SHAKE_SCALE } from './scene/fx';
 import { planMove } from './scene/plan';
@@ -13,7 +14,7 @@ import { createAnimatorStage } from './scene/stage';
 import { createBoard, squareToWorld } from './scene/board';
 import { createHall, hallColliders } from './scene/hall';
 import { detailForTier, getMaterials } from './scene/materials';
-import { createPieces } from './scene/pieces';
+import { buildPawnPedestal, createPieces, PAWN_PEDESTAL_TOP } from './scene/pieces';
 import { fromFen, initialState, legalMoves, outcome, parseUci, toFen, type GameState, type Move, type Square } from './game';
 import { createAiController } from './ai/controller';
 import { createWorkerPort } from './ai/workerPort';
@@ -90,10 +91,23 @@ async function main(): Promise<void> {
   const proc = createProceduralAnimator({ fragments: FRAGMENTS[startTier] });
   // Step 4b: knights become a rigged Quaternius horse (CC0) on their turned base once the glTF arrives;
   // `?characters=0` opts out.
-  const animator = createCharacterAnimator(proc, 'knight', {
+  const knights = createCharacterAnimator(proc, 'knight', {
     body: (c) => getMaterials(detail)[c === 'white' ? 'ivory' : 'ebony'],
     accent: () => getMaterials(detail).gold,
     eye: () => getMaterials(detail).ebony,
+  });
+  // Step 5: pawns become the user-supplied rigged spearman (public/models/pawn) on a low pedestal.
+  const animator = createFigureAnimator(knights, {
+    type: 'pawn',
+    materials: {
+      body: (c) => getMaterials(detail)[c === 'white' ? 'ivory' : 'ebony'],
+      gold: () => getMaterials(detail).gold,
+      dark: () => getMaterials(detail).ebony,
+    },
+    pedestal: (c) => buildPawnPedestal(c, detail),
+    pedestalTop: PAWN_PEDESTAL_TOP,
+    height: 0.5,
+    weaponHand: 'RightHand',
   });
   animator.idleSway = startTier !== 'off';
   const fx = createStrikeFx();
@@ -209,16 +223,26 @@ async function main(): Promise<void> {
 
   let charactersReady: Promise<unknown> = Promise.resolve();
   if (params.get('characters') !== '0') {
-    charactersReady = loadCharacterKit(`${import.meta.env.BASE_URL}models/quaternius-horse/Horse.glb`)
-      .then((kit) => {
-        animator.kit = kit;
-        // Mid-move the animator holds the old meshes' poses; characters join at the next idle.
-        if (choreo.phase === 'idle') {
-          idleAll();
-          markShadowsDirty('piece-move');
-        }
-      })
-      .catch((e: unknown) => console.warn('character models unavailable, keeping procedural knights', e));
+    // Mid-move the animator holds the old meshes' poses; characters join at the next idle.
+    const join = (): void => {
+      if (choreo.phase !== 'idle') return;
+      idleAll();
+      markShadowsDirty('piece-move');
+    };
+    charactersReady = Promise.all([
+      loadCharacterKit(`${import.meta.env.BASE_URL}models/quaternius-horse/Horse.glb`)
+        .then((kit) => {
+          knights.kit = kit;
+          join();
+        })
+        .catch((e: unknown) => console.warn('horse model unavailable, keeping procedural knights', e)),
+      loadFigureKit(`${import.meta.env.BASE_URL}models/pawn/Pawn.glb`)
+        .then((kit) => {
+          animator.kit = kit;
+          join();
+        })
+        .catch((e: unknown) => console.warn('pawn model unavailable, keeping procedural pawns', e)),
+    ]);
   }
 
   const demoMove = params.get('play');
