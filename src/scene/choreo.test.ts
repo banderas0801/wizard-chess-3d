@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Vector3 } from 'three';
-import { fromFen, initialState, parseUci, toFen, type GameState } from '../game';
+import { Quaternion, Vector3 } from 'three';
+import { fromFen, initialState, parseUci, toFen, type GameState, type PieceType } from '../game';
 import { createProceduralAnimator } from './anim';
 import { squareToWorld } from './board';
 import { createChoreographer, type ChoreoStage, type Phase } from './choreo';
@@ -256,7 +256,7 @@ describe('choreographer behaviour', () => {
     expect(h.log).toContain('fx vortex'); // particles stay, the fx layer scales them by tier
   });
 
-  it.each(Object.keys(STRIKE_PROFILES) as (keyof typeof STRIKE_PROFILES)[])('pacing: a %s capture runs ~2.5-3 s end to end', (type) => {
+  it.each(Object.keys(STRIKE_PROFILES) as (keyof typeof STRIKE_PROFILES)[])('pacing: a %s capture runs ~2.2-3 s end to end', (type) => {
     for (const [from, to] of [['d4', 'd5'], ['d4', 'd7'], ['b1', 'c3']] as const) {
       const choreo = createChoreographer<number>({
         stage: { move() {}, attack() {}, pull() {}, shatter() {}, fall() {}, cancel() {}, release() {} },
@@ -275,7 +275,7 @@ describe('choreographer behaviour', () => {
         choreo.tick(DT);
         t += DT;
       }
-      expect(t, `${type} ${from}-${to}`).toBeGreaterThanOrEqual(2.4);
+      expect(t, `${type} ${from}-${to}`).toBeGreaterThanOrEqual(2.2);
       expect(t, `${type} ${from}-${to}`).toBeLessThanOrEqual(3.2);
     }
   });
@@ -284,5 +284,102 @@ describe('choreographer behaviour', () => {
     const src = readFileSync(join(import.meta.dirname, 'choreo.ts'), 'utf8').replace(/\/\/.*$/gm, '');
     for (const t of Object.keys(STRIKE_PROFILES)) expect(src).not.toMatch(new RegExp(`['"]${t}['"]`));
     expect(src).not.toMatch(/switch\s*\([^)]*type/);
+  });
+});
+
+describe('capture motion is continuous (no snap, no dead hold)', () => {
+  // One capture per strike profile, played on real pieces with the app's commit (sync + idle).
+  const CASES: Record<PieceType, readonly [string, string]> = {
+    pawn: ['4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1', 'e4d5'],
+    knight: ['4k3/8/8/3p4/8/4N3/8/4K3 w - - 0 1', 'e3d5'],
+    bishop: [CAPTURE_FEN, 'c4f7'],
+    rook: ['4k3/8/8/3p4/8/8/8/3RK3 w - - 0 1', 'd1d5'],
+    queen: ['4k3/8/8/3p4/8/8/8/3QK3 w - - 0 1', 'd1d5'],
+    king: ['4k3/8/8/8/8/8/3p4/4K3 w - - 0 1', 'e1d2'],
+  };
+
+  it.each(Object.keys(CASES) as PieceType[])('%s: attacker rotation never jumps across the capture', (type) => {
+    const [fen, uci] = CASES[type];
+    let game = fromFen(fen);
+    const pieces = createPieces('low');
+    pieces.sync(game.board);
+    const animator = createProceduralAnimator({ fragments: 4 });
+    const stage = createAnimatorStage({ animator, get: (id) => pieces.get(id), fx: { clear() {} } });
+    const phases: Phase[] = [];
+    const choreo = createChoreographer<GameState>({
+      stage,
+      commit(next) {
+        game = next;
+        pieces.sync(game.board); // as main's show(): rotation back to restYaw, position on the square
+        for (const o of pieces.group.children) animator.play(o, 'idle');
+      },
+      toggles: () => ({ shake: false, closeUp: false }),
+      effect() {},
+      closeUp() {},
+      closeUpEnd() {},
+      onPhase: (p) => phases.push(p),
+    });
+    const plan = planMove(game, parseUci(uci)!)!;
+    expect(plan.profile).toBe(STRIKE_PROFILES[type]);
+    const attacker = pieces.get(plan.mover.id)!;
+    expect(choreo.begin(plan)).toBe(true);
+
+    const prev = new Quaternion().copy(attacker.quaternion);
+    const prevPos = attacker.position.clone();
+    let commitJump = Infinity;
+    let maxAfterImpact = 0;
+    let impact = false;
+    for (let i = 0; i < 600 && choreo.phase !== 'idle'; i++) {
+      const before = choreo.phase;
+      choreo.tick(DT);
+      animator.update(DT);
+      const jump = prev.angleTo(attacker.quaternion);
+      if (before === 'shatter' && choreo.phase !== 'shatter') {
+        commitJump = jump;
+        expect(attacker.position.distanceTo(prevPos), 'position at commit').toBeLessThan(0.05);
+      }
+      if (impact) maxAfterImpact = Math.max(maxAfterImpact, jump);
+      if (choreo.phase === 'shatter') impact = true;
+      prev.copy(attacker.quaternion);
+      prevPos.copy(attacker.position);
+    }
+    expect(phases).toEqual(['approach', 'strike', 'shatter', 'settle', 'idle']);
+    expect(commitJump, 'rotation step on the commit frame').toBeLessThan(0.02);
+    // Spins/slashes turn fast, but never a one-frame snap.
+    expect(maxAfterImpact, 'largest per-frame rotation after impact').toBeLessThan(0.35);
+  });
+
+  it.each(Object.keys(STRIKE_PROFILES) as PieceType[])('%s: settle starts as the attack clip ends (no dead hold)', (type) => {
+    const prof = STRIKE_PROFILES[type];
+    const durations: Partial<Record<Phase, number>> = {};
+    let attackDur = 0;
+    let at = 0;
+    let current: Phase = 'idle';
+    let t = 0;
+    const choreo = createChoreographer<number>({
+      stage: { move() {}, attack: (_id, _to, o) => void (attackDur = o.duration), pull() {}, shatter() {}, fall() {}, cancel() {}, release() {} },
+      commit() {},
+      toggles: () => ({ shake: false, closeUp: false }),
+      effect() {},
+      closeUp() {},
+      closeUpEnd() {},
+      onPhase(next) {
+        durations[current] = t - at;
+        current = next;
+        at = t;
+      },
+    });
+    choreo.begin({
+      mover: { id: 'a', from: 'd4', to: 'd5' }, profile: prof, capture: { id: 'v', square: 'd5' },
+      companions: [], promotion: null, mate: null, next: 1,
+    });
+    const step = 1 / 600;
+    while (choreo.phase !== 'idle' && t < 10) {
+      t += step;
+      choreo.tick(step);
+    }
+    expect(attackDur).toBeCloseTo(prof.strike, 6);
+    expect(durations.shatter!).toBeCloseTo(prof.strike * (1 - prof.impactAt), 2);
+    expect(durations.strike! + durations.shatter!).toBeCloseTo(prof.strike, 2);
   });
 });
