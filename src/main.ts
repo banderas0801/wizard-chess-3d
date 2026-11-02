@@ -6,7 +6,6 @@ import { createPost } from './render/post';
 import { createQualityGovernor, parseTier, type QualityTier } from './render/quality';
 import { createProceduralAnimator } from './scene/anim';
 import { createCharacterAnimator, loadCharacterKit } from './scene/character';
-import { createFigureAnimator, loadFigureKit } from './scene/figure';
 import { createStatueAnimator, loadStatueKit } from './scene/statue';
 import { MODEL_ASSETS } from './scene/assets';
 import { createChoreographer, TIMING } from './scene/choreo';
@@ -17,7 +16,7 @@ import { createAnimatorStage } from './scene/stage';
 import { createBoard, squareToWorld } from './scene/board';
 import { createHall, hallColliders } from './scene/hall';
 import { detailForTier, getMaterials } from './scene/materials';
-import { buildPawnPedestal, createPieces, PAWN_PEDESTAL_TOP } from './scene/pieces';
+import { createPieces } from './scene/pieces';
 import { fromFen, initialState, legalMoves, outcome, parseUci, toFen, type GameState, type Move, type Square } from './game';
 import { createAiController } from './ai/controller';
 import { createWorkerPort } from './ai/workerPort';
@@ -102,19 +101,9 @@ async function main(): Promise<void> {
     accent: () => getMaterials(detail).gold,
     eye: () => getMaterials(detail).ebony,
   });
-  // Step 5: pawns become the user-supplied rigged spearman (public/models/pawn) on a low pedestal.
-  const pawns = createFigureAnimator(knights, {
-    type: 'pawn',
-    materials: {
-      body: (c) => getMaterials(detail)[c === 'white' ? 'ivory' : 'ebony'],
-      gold: () => getMaterials(detail).gold,
-      dark: () => getMaterials(detail).ebony,
-    },
-    pedestal: (c) => buildPawnPedestal(c, detail),
-    pedestalTop: PAWN_PEDESTAL_TOP,
-    height: 0.5,
-    weaponHand: 'RightHand',
-  });
+  // Pawns become the user's Meshy spearman (public/models/pieces/pawn_white.glb), a rigid statue on the
+  // same layer as the rooks: white gold aura, black obsidian + crimson. The pawn strike profile is unchanged.
+  const pawns = createStatueAnimator(knights, { type: 'pawn', height: 0.6 });
   // Rooks become the user's Meshy hammer knight (public/models/pieces), a rigid statue: the whole
   // figure tilts, leaps and squashes (the 'slam' strike); white gold aura, black obsidian + crimson.
   const animator = createStatueAnimator(pawns, { type: 'rook', height: 0.95 });
@@ -266,7 +255,7 @@ async function main(): Promise<void> {
           join();
         })
         .catch((e: unknown) => console.warn('horse model unavailable, keeping procedural knights', e)),
-      loadFigureKit(`${import.meta.env.BASE_URL}${MODEL_ASSETS.pawn.base}`)
+      loadStatueKit(`${import.meta.env.BASE_URL}${MODEL_ASSETS.pawn.base}`)
         .then((kit) => {
           pawns.kit = kit;
           join();
