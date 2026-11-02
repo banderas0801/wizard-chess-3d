@@ -1,9 +1,10 @@
 // One height table (TARGET_HEIGHT) sizes every piece: it keeps the chess ranking, covers every
-// model listed in MODEL_ASSETS, and agrees with the turned procedural pieces it stands beside.
+// model listed in MODEL_ASSETS, gives every piece type a sculpted statue, and agrees with the turned
+// procedural pieces that stand in when a statue fails to load.
 import { describe, expect, it } from 'vitest';
 import { Box3 } from 'three';
 import type { PieceType } from '../src/game';
-import { MAX_FOOTPRINT, MODEL_ASSETS, TARGET_HEIGHT, type ModelAsset } from '../src/scene/assets';
+import { MAX_FOOTPRINT, MODEL_ASSETS, STATUE_ASSET, TARGET_HEIGHT, type ModelAsset } from '../src/scene/assets';
 import { pieceParts } from '../src/scene/pieces';
 
 const h = TARGET_HEIGHT;
@@ -37,7 +38,15 @@ describe('piece heights', () => {
     }
   });
 
-  it.each(['king', 'queen', 'bishop', 'knight'] as const)('the turned %s matches its table height', (type) => {
+  it.each(['pawn', 'rook', 'knight', 'bishop', 'queen', 'king'] as const)('the %s stands as a sculpted statue of its own type', (type) => {
+    const a: ModelAsset = MODEL_ASSETS[STATUE_ASSET[type]];
+    expect(a.kind).toBe('piece');
+    expect(a.piece).toBe(type);
+    expect(a.base).toMatch(/^models\/pieces\/[a-z]+_white\.glb$/);
+  });
+
+  // Fallback only (shown when the statue fails to load), but it must not break the ranking then.
+  it.each(['king', 'queen', 'bishop', 'knight'] as const)('the turned %s fallback matches its table height', (type) => {
     expect(proceduralHeight(type)).toBeCloseTo(h[type], 1);
   });
 
