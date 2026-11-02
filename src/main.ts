@@ -7,7 +7,7 @@ import { createQualityGovernor, parseTier, type QualityTier } from './render/qua
 import { createProceduralAnimator } from './scene/anim';
 import { createCharacterAnimator, loadCharacterKit } from './scene/character';
 import { createStatueAnimator, loadStatueKit, type StatueKit } from './scene/statue';
-import { MODEL_ASSETS, PEDESTAL_DIAMETER, PEDESTAL_TOP, type AssetName } from './scene/assets';
+import { MODEL_ASSETS, type AssetName } from './scene/assets';
 import { createChoreographer, TIMING } from './scene/choreo';
 import { SHAKE_SCALE, shakeAllowed as shakeGate, type Side } from './fx/budget';
 import { createStrikeFx } from './fx/strike-fx';
@@ -16,8 +16,8 @@ import { createAnimatorStage } from './scene/stage';
 import { createBoard, squareToWorld } from './scene/board';
 import { createHall, hallColliders } from './scene/hall';
 import { detailForTier, getMaterials } from './scene/materials';
-import { buildPawnPedestal, createPieces, PAWN_PEDESTAL_FOOT, PAWN_PEDESTAL_TOP } from './scene/pieces';
-import { fromFen, initialState, legalMoves, outcome, parseUci, toFen, type Color as PieceColor, type GameState, type Move, type PieceType, type Square } from './game';
+import { createPieces } from './scene/pieces';
+import { fromFen, initialState, legalMoves, outcome, parseUci, toFen, type GameState, type Move, type PieceType, type Square } from './game';
 import { createAiController } from './ai/controller';
 import { createWorkerPort } from './ai/workerPort';
 
@@ -101,16 +101,8 @@ async function main(): Promise<void> {
     accent: () => getMaterials(detail).gold,
     eye: () => getMaterials(detail).ebony,
   });
-  // Sculpted statues stand on the pawn's turned pedestal (ivory/ebony + gold rim), sized from scene/assets:
-  // PEDESTAL_DIAMETER across the foot, PEDESTAL_TOP tall; the figure on it is fitted to TARGET_HEIGHT.
-  const pedestal = (type: PieceType) => (c: PieceColor) => {
-    const p = buildPawnPedestal(c, detail);
-    const foot = PEDESTAL_DIAMETER[type] / (2 * PAWN_PEDESTAL_FOOT);
-    p.scale.set(foot, PEDESTAL_TOP / PAWN_PEDESTAL_TOP, foot);
-    return p;
-  };
-  const statues = (base: Parameters<typeof createStatueAnimator>[0], type: PieceType) =>
-    createStatueAnimator(base, { type, pedestal: pedestal(type), pedestalTop: PEDESTAL_TOP });
+  // Sculpted statues stand straight on the square (no pedestal), scaled to STATUE_HEIGHT (scene/assets).
+  const statues = (base: Parameters<typeof createStatueAnimator>[0], type: PieceType) => createStatueAnimator(base, { type });
   // Every piece is the user's Meshy statue (public/models/pieces), a rigid figure on the statue layer:
   // white gold aura, black obsidian + crimson; strike profiles unchanged (the rook's is the 'slam').
   // The knight statue replaces the rigged horse, which is only loaded as its fallback (see
