@@ -1,5 +1,5 @@
 import { Color, DirectionalLight, Fog, HemisphereLight, PerspectiveCamera, Scene, Timer, Vector3 } from 'three';
-import { createCameraRig, type Preset } from './render/camera';
+import { CAPTURE_SHOT, createCameraRig, MATE_SHOT, type Preset } from './render/camera';
 import { createRenderer } from './render/renderer';
 import { loadEnvironment } from './render/env';
 import { createPost } from './render/post';
@@ -7,7 +7,7 @@ import { createQualityGovernor, parseTier, type QualityTier } from './render/qua
 import { createProceduralAnimator } from './scene/anim';
 import { createCharacterAnimator, loadCharacterKit } from './scene/character';
 import { createFigureAnimator, loadFigureKit } from './scene/figure';
-import { createChoreographer } from './scene/choreo';
+import { createChoreographer, TIMING } from './scene/choreo';
 import { createStrikeFx, SHAKE_SCALE } from './scene/fx';
 import { planMove } from './scene/plan';
 import { createAnimatorStage } from './scene/stage';
@@ -132,6 +132,8 @@ async function main(): Promise<void> {
   const stage = createAnimatorStage({ animator, get: (id) => pieces.get(id), fx });
 
   let phaseTime = 0;
+  /** Seconds left before the AI is asked to move (a beat between moves); < 0 = not waiting. */
+  let aiWait = -1;
   let timeScale = 1;
   const pauseSpec = params.get('pause')?.split(':');
   const fixedDt = Number(params.get('fixedDt') ?? 0); // deterministic stepping for slow headless captures
@@ -155,14 +157,14 @@ async function main(): Promise<void> {
       const from = pieces.get(moverId)?.position.clone() ?? world(at);
       fx.play(cue.kind, from, world(at), cue.strength, tier);
     },
-    closeUp: (sq) => void rig.focus(world(sq)),
+    closeUp: (sq, shot) => void (shot === 'mate' ? rig.focus(world(sq), 900, MATE_SHOT) : rig.focus(world(sq), 450, CAPTURE_SHOT)),
     closeUpEnd: () => void rig.unfocus(),
     onPhase(next) {
       phaseTime = 0;
       if (pauseSpec && next === pauseSpec[0] && Number(pauseSpec[1]) === 0) timeScale = 0;
     },
     onIdle(reason) {
-      if (reason === 'settled') maybeAskAi();
+      if (reason === 'settled') aiWait = TIMING.gap;
     },
   });
 
@@ -203,6 +205,7 @@ async function main(): Promise<void> {
 
   /** Never locked: cancel any animation (state untouched), then roll history back separately. */
   const undo = (): void => {
+    aiWait = -1;
     choreo.cancel();
     ai.undo(); // cancels any in-flight search and bumps requestId
     // Undo back to the human's turn.
@@ -214,7 +217,9 @@ async function main(): Promise<void> {
   };
 
   const reset = (): void => {
+    aiWait = -1;
     choreo.cancel();
+    void rig.unfocus(); // leave a held checkmate close-up
     ai.reset();
     history.length = 0;
     game = initialState();
@@ -296,6 +301,10 @@ async function main(): Promise<void> {
   const frame = (ts: number): void => {
     timer.update(ts);
     const dt = fixedDt > 0 ? fixedDt : timer.getDelta();
+    if (aiWait >= 0) {
+      aiWait -= dt;
+      if (aiWait < 0) maybeAskAi();
+    }
     phaseTime += dt * timeScale;
     if (pauseSpec && choreo.phase === pauseSpec[0] && phaseTime >= Number(pauseSpec[1])) timeScale = 0;
     const adt = dt * timeScale;
