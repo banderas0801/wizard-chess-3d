@@ -11,7 +11,7 @@ export function planMove(state: GameState, m: Move): MovePlan<GameState> | null 
 
   let mate: MovePlan<GameState>['mate'] = null;
   if (outcome(r.state) === 'checkmate') {
-    for (const p of r.state.board.values()) if (p.type === 'king' && p.color === r.state.turn) mate = { kingId: p.id };
+    for (const [sq, p] of r.state.board) if (p.type === 'king' && p.color === r.state.turn) mate = { kingId: p.id, square: sq };
   }
 
   return {

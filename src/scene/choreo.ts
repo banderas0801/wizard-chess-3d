@@ -3,6 +3,8 @@
 //   quiet:   idle --begin--> approach -------------------------> settle --> idle
 //   capture: idle --begin--> approach --> strike --> shatter --> settle --> idle
 //   mate:                                                        settle --> kingFall --> idle
+//                                     (kingFall opens a low 'mate' close-up on the falling king; it is the
+//                                      final shot and stays after idle until the app undoes or resets)
 //   approach | strike | shatter --cancel()--> cancelled --> idle   (never via settle; FEN untouched)
 //   settle | kingFall --cancel()--> idle                          (already committed; animation stops, state kept)
 //
@@ -39,8 +41,8 @@ export interface MovePlan<S> {
   readonly companions: readonly PieceMove[];
   /** Promotion: the mover's mesh is swapped for this type when the state is committed. */
   readonly promotion: Promotion | null;
-  /** Losing king when the move mates. */
-  readonly mate: { readonly kingId: string } | null;
+  /** Losing king (and its square) when the move mates. */
+  readonly mate: { readonly kingId: string; readonly square: Square } | null;
   /** The state to commit at settle. */
   readonly next: S;
 }
@@ -65,18 +67,22 @@ export interface ChoreoHost<S> {
   toggles(): { readonly shake: boolean; readonly closeUp: boolean };
   /** Fire a profile fx cue; `moverId` lets the app start it at the attacker's live position. */
   effect(cue: FxCue, moverId: string, at: Square): void;
-  closeUp(at: Square): void;
+  /** 'capture' follows the strike and ends with the move; 'mate' frames the falling king and is kept. */
+  closeUp(at: Square, shot?: 'capture' | 'mate'): void;
   closeUpEnd(): void;
   onPhase?(next: Phase, prev: Phase): void;
   onIdle?(reason: 'settled' | 'cancelled'): void;
 }
 
+/** Seconds. A capture runs ~2.5-3 s end to end (approach + strike + shatter + settle). */
 export const TIMING = {
-  minMove: 0.32,
-  maxMove: 0.95,
-  shatter: 0.6,
+  minMove: 0.6,
+  maxMove: 1.2,
+  shatter: 0.9,
   settle: 0.14,
-  kingFall: 1.2,
+  kingFall: 2.2,
+  /** Pause after a move settles before the next one starts (the app waits this long before asking the AI). */
+  gap: 1.0,
 } as const;
 
 const squareDist = (a: Square, b: Square): number =>
@@ -84,7 +90,7 @@ const squareDist = (a: Square, b: Square): number =>
 
 export function travelTime(profile: StrikeProfile, from: Square, to: Square, stopShort = 0): number {
   const d = Math.max(0, squareDist(from, to) - stopShort);
-  return Math.min(TIMING.maxMove, Math.max(TIMING.minMove, 0.15 + d * profile.approach.secondsPerSquare));
+  return Math.min(TIMING.maxMove, Math.max(TIMING.minMove, 0.25 + d * profile.approach.secondsPerSquare));
 }
 
 export interface Choreographer<S> {
@@ -157,11 +163,16 @@ export function createChoreographer<S>(host: ChoreoHost<S>): Choreographer<S> {
       case 'settle':
         if (p.mate) {
           go('kingFall', TIMING.kingFall);
+          if (host.toggles().closeUp) {
+            closeUp = true;
+            host.closeUp(p.mate.square, 'mate');
+          }
           host.stage.fall(p.mate.kingId, TIMING.kingFall);
           return;
         }
         return toIdle('settled');
       case 'kingFall':
+        closeUp = false; // the mate shot is the last frame of the game: keep it (undo/reset fly back)
         return toIdle('settled');
       default:
         return;
@@ -203,7 +214,7 @@ export function createChoreographer<S>(host: ChoreoHost<S>): Choreographer<S> {
         go('approach', travelTime(next.profile, next.mover.from, next.mover.to, stop));
         if (host.toggles().closeUp) {
           closeUp = true;
-          host.closeUp(next.mover.to);
+          host.closeUp(next.mover.to, 'capture');
         }
         host.stage.move(next.mover, { duration: left, hop: a.hop, stopShort: Math.max(0, stop) });
       } else {
