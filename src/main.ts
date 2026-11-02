@@ -8,7 +8,7 @@ import { createProceduralAnimator } from './scene/anim';
 import { createCharacterAnimator, loadCharacterKit } from './scene/character';
 import { createStatueAnimator, loadStatueKit, type StatueKit } from './scene/statue';
 import { MODEL_ASSETS, type AssetName } from './scene/assets';
-import { createChoreographer, TIMING } from './scene/choreo';
+import { animDt, createChoreographer, TIMING } from './scene/choreo';
 import { SHAKE_SCALE, shakeAllowed as shakeGate, type Side } from './fx/budget';
 import { createStrikeFx } from './fx/strike-fx';
 import { planMove } from './scene/plan';
@@ -337,11 +337,12 @@ async function main(): Promise<void> {
       aiWait -= dt;
       if (aiWait < 0) maybeAskAi();
     }
-    phaseTime += dt * timeScale;
+    const step = animDt(dt); // pieces/fx/choreo never jump more than MAX_ANIM_DT per frame
+    phaseTime += step * timeScale;
     if (pauseSpec && choreo.phase === pauseSpec[0] && phaseTime >= Number(pauseSpec[1])) timeScale = 0;
     const slow = slowmo > 0 ? SLOWMO_RATE : 1;
     slowmo = Math.max(0, slowmo - dt);
-    const adt = dt * timeScale * slow;
+    const adt = step * timeScale * slow;
     choreo.tick(adt);
     animator.update(adt);
     fx.update(adt);
