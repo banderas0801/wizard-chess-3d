@@ -8,7 +8,8 @@ import { createProceduralAnimator } from './scene/anim';
 import { createCharacterAnimator, loadCharacterKit } from './scene/character';
 import { createFigureAnimator, loadFigureKit } from './scene/figure';
 import { createChoreographer, TIMING } from './scene/choreo';
-import { createStrikeFx, SHAKE_SCALE } from './scene/fx';
+import { SHAKE_SCALE, shakeAllowed as shakeGate, type Side } from './fx/budget';
+import { createStrikeFx } from './fx/strike-fx';
 import { planMove } from './scene/plan';
 import { createAnimatorStage } from './scene/stage';
 import { createBoard, squareToWorld } from './scene/board';
@@ -88,7 +89,7 @@ async function main(): Promise<void> {
   // `zen`: future Zen mode; for now it only turns camera shake off (`?zen=1` or the z key).
   const toggles = { shake: true, closeUp: true, zen: params.get('zen') === '1' };
   /** Shake is off at tier off and in Zen mode, whatever the s toggle says. */
-  const shakeAllowed = (): boolean => toggles.shake && !toggles.zen && tier !== 'off';
+  const shakeAllowed = (): boolean => shakeGate(toggles, tier);
   const FRAGMENTS: Record<QualityTier, number> = { high: 18, low: 10, off: 5 };
 
   const proc = createProceduralAnimator({ fragments: FRAGMENTS[startTier] });
@@ -135,6 +136,10 @@ async function main(): Promise<void> {
   /** Seconds left before the AI is asked to move (a beat between moves); < 0 = not waiting. */
   let aiWait = -1;
   let timeScale = 1;
+  /** Real seconds of the king's slow-motion beat left (time runs at SLOWMO_RATE meanwhile). */
+  let slowmo = 0;
+  const SLOWMO_SECONDS = 0.45;
+  const SLOWMO_RATE = 0.3;
   const pauseSpec = params.get('pause')?.split(':');
   const fixedDt = Number(params.get('fixedDt') ?? 0); // deterministic stepping for slow headless captures
 
@@ -148,14 +153,24 @@ async function main(): Promise<void> {
       show();
     },
     toggles: () => ({ shake: shakeAllowed(), closeUp: toggles.closeUp && tier !== 'off' }),
-    effect(cue, moverId, at) {
+    effect(cue, moverId, at, impactIn) {
       if (cue.kind === 'shake') {
         const k = SHAKE_SCALE[tier];
         if (k > 0) rig.shake(0.16 * cue.strength * k);
         return;
       }
-      const from = pieces.get(moverId)?.position.clone() ?? world(at);
-      fx.play(cue.kind, from, world(at), cue.strength, tier);
+      if (cue.kind === 'slowmo') {
+        if (tier !== 'off' && !toggles.zen) slowmo = SLOWMO_SECONDS * cue.strength;
+        return;
+      }
+      const mover = pieces.get(moverId);
+      const last = (mover?.position ?? world(at)).clone();
+      const from = (): Vector3 => {
+        const o = pieces.get(moverId); // the mover's live position; its last one once it is gone
+        return o ? last.copy(o.position) : last;
+      };
+      const side: Side = (mover?.userData.color as Side | undefined) ?? game.turn;
+      fx.play(cue, { from, to: world(at), side, tier, impactIn });
     },
     closeUp: (sq, shot) => void (shot === 'mate' ? rig.focus(world(sq), 900, MATE_SHOT) : rig.focus(world(sq), 450, CAPTURE_SHOT)),
     closeUpEnd: () => void rig.unfocus(),
@@ -206,6 +221,7 @@ async function main(): Promise<void> {
   /** Never locked: cancel any animation (state untouched), then roll history back separately. */
   const undo = (): void => {
     aiWait = -1;
+    slowmo = 0;
     choreo.cancel();
     ai.undo(); // cancels any in-flight search and bumps requestId
     // Undo back to the human's turn.
@@ -218,6 +234,7 @@ async function main(): Promise<void> {
 
   const reset = (): void => {
     aiWait = -1;
+    slowmo = 0;
     choreo.cancel();
     void rig.unfocus(); // leave a held checkmate close-up
     ai.reset();
@@ -307,7 +324,9 @@ async function main(): Promise<void> {
     }
     phaseTime += dt * timeScale;
     if (pauseSpec && choreo.phase === pauseSpec[0] && phaseTime >= Number(pauseSpec[1])) timeScale = 0;
-    const adt = dt * timeScale;
+    const slow = slowmo > 0 ? SLOWMO_RATE : 1;
+    slowmo = Math.max(0, slowmo - dt);
+    const adt = dt * timeScale * slow;
     choreo.tick(adt);
     animator.update(adt);
     fx.update(adt);
