@@ -11,7 +11,7 @@ export interface ModelAsset {
   readonly kind: AssetKind;
   readonly base: string;
   readonly blackOverride?: string;
-  /** The board piece this model stands in for (its size comes from TARGET_HEIGHT). */
+  /** The board piece this model stands in for (its size comes from STATUE_HEIGHT / TARGET_HEIGHT). */
   readonly piece?: PieceType;
 }
 
@@ -41,10 +41,9 @@ export const STATUE_ASSET = {
 export type AssetName = keyof typeof MODEL_ASSETS;
 
 /**
- * Overall height of each piece on the board, foot of the pedestal to the crown, in board squares.
- * One table for every piece: sculpted models are scaled to it at load (scene/statue.ts), and the
- * turned procedural fallbacks are checked against it (tests/heights.test.ts), so a new Meshy file lands
- * at the right size. Order: king > queen > rook, knight, bishop > pawn.
+ * Height of each turned procedural piece (the fallbacks shown when a statue fails to load), foot of
+ * the base to the crown, in board squares; checked by tests/heights.test.ts.
+ * Order: king > queen > rook, knight, bishop > pawn.
  */
 export const TARGET_HEIGHT: Readonly<Record<PieceType, number>> = {
   king: 1.65,
@@ -56,23 +55,25 @@ export const TARGET_HEIGHT: Readonly<Record<PieceType, number>> = {
 };
 
 /**
- * Widest a sculpted figure may spread (the circle around its x/z extent, as a fraction of the square),
- * so it never overflows. Below 1: two neighbours' circles can't meet even at worst.
+ * Height of each sculpted (Meshy) statue, feet to crown, in board squares. The statues stand straight
+ * on the square with no pedestal; scene/statue.ts scales each model to this at load, so a new Meshy
+ * file lands at the right size. Each value is reachable inside MAX_FOOTPRINT at the statues' rest
+ * facing (tests/heights.test.ts measures the shipped files). Order: king > queen > rook, knight, bishop > pawn.
  */
-export const MAX_FOOTPRINT = 0.94;
-
-/** Height of the statues' turned pedestal top, where a figure's feet stand (board squares). */
-export const PEDESTAL_TOP = 0.26;
-
-/** Foot diameter of each statue's pedestal, as a fraction of the square (about 75–80%). */
-export const PEDESTAL_DIAMETER: Readonly<Record<PieceType, number>> = {
-  king: 0.8,
-  queen: 0.8,
-  rook: 0.78,
-  knight: 0.78,
-  bishop: 0.76,
-  pawn: 0.72,
+export const STATUE_HEIGHT: Readonly<Record<PieceType, number>> = {
+  king: 1.74,
+  queen: 1.62,
+  rook: 1.46,
+  bishop: 1.46,
+  knight: 1.4,
+  pawn: 1.2,
 };
+
+/**
+ * Widest a statue may spread across or along its square at its rest facing (the box around its
+ * footprint, as a fraction of the square), so neighbours one square apart never meet.
+ */
+export const MAX_FOOTPRINT = 0.95;
 
 const MB = 1024 * 1024;
 /** Download budgets (bytes): per file by kind, and for every listed file together. */
