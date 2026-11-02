@@ -3,7 +3,7 @@
 //
 // A piece may ship one file for both sides (`base`; the black side is recoloured at runtime) or
 // a separate black file (`blackOverride`).
-import type { Color } from '../game';
+import type { Color, PieceType } from '../game';
 
 export type AssetKind = 'piece' | 'prop';
 
@@ -11,17 +11,37 @@ export interface ModelAsset {
   readonly kind: AssetKind;
   readonly base: string;
   readonly blackOverride?: string;
+  /** The board piece this model stands in for (its size comes from TARGET_HEIGHT). */
+  readonly piece?: PieceType;
 }
 
 export const MODEL_ASSETS = {
-  horse: { kind: 'piece', base: 'models/quaternius-horse/Horse.glb' },
-  pawn: { kind: 'piece', base: 'models/pieces/pawn_white.glb' },
+  horse: { kind: 'piece', piece: 'knight', base: 'models/quaternius-horse/Horse.glb' },
+  pawn: { kind: 'piece', piece: 'pawn', base: 'models/pieces/pawn_white.glb' },
   /** Previous rigged spearman, now unused by the game (kept for scene/figure.ts and its test). */
-  spearman: { kind: 'piece', base: 'models/pawn/Pawn.glb' },
-  rook: { kind: 'piece', base: 'models/pieces/rook_white.glb' },
+  spearman: { kind: 'piece', piece: 'pawn', base: 'models/pawn/Pawn.glb' },
+  rook: { kind: 'piece', piece: 'rook', base: 'models/pieces/rook_white.glb' },
 } as const satisfies Readonly<Record<string, ModelAsset>>;
 
 export type AssetName = keyof typeof MODEL_ASSETS;
+
+/**
+ * Overall height of each piece on the board, foot of the pedestal to the crown, in board squares.
+ * One table for every piece: sculpted models are scaled to it at load (scene/statue.ts), and the
+ * turned procedural pieces are checked against it (tests/assets.test.ts), so a new Meshy file lands
+ * at the right size. Order: king > queen > rook, knight, bishop > pawn.
+ */
+export const TARGET_HEIGHT: Readonly<Record<PieceType, number>> = {
+  king: 1.3,
+  queen: 1.09,
+  bishop: 0.95,
+  rook: 0.98,
+  knight: 0.9,
+  pawn: 0.8,
+};
+
+/** Widest a sculpted figure may spread across its square (fraction of the square), so it never overflows. */
+export const MAX_FOOTPRINT = 0.78;
 
 const MB = 1024 * 1024;
 /** Download budgets (bytes): per file by kind, and for every listed file together. */
