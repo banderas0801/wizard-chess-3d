@@ -70,6 +70,11 @@ describe('piece heights', () => {
     expectRanked(h);
   });
 
+  it('the wide rook statue stands no taller than the bishop and knight statues, so it reads no bigger', () => {
+    expect(STATUE_HEIGHT.bishop).toBeGreaterThanOrEqual(STATUE_HEIGHT.rook);
+    expect(STATUE_HEIGHT.knight).toBeGreaterThanOrEqual(STATUE_HEIGHT.rook);
+  });
+
   it('statues stand tall: at least as tall as the turned set, the pawn over a square', () => {
     for (const type of TYPES) expect(STATUE_HEIGHT[type]).toBeGreaterThanOrEqual(h[type]);
     expect(STATUE_HEIGHT.pawn).toBeGreaterThanOrEqual(1.2);
