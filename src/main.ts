@@ -7,6 +7,8 @@ import { createQualityGovernor, parseTier, type QualityTier } from './render/qua
 import { createProceduralAnimator } from './scene/anim';
 import { createCharacterAnimator, loadCharacterKit } from './scene/character';
 import { createFigureAnimator, loadFigureKit } from './scene/figure';
+import { createStatueAnimator, loadStatueKit } from './scene/statue';
+import { MODEL_ASSETS } from './scene/assets';
 import { createChoreographer, TIMING } from './scene/choreo';
 import { SHAKE_SCALE, shakeAllowed as shakeGate, type Side } from './fx/budget';
 import { createStrikeFx } from './fx/strike-fx';
@@ -101,7 +103,7 @@ async function main(): Promise<void> {
     eye: () => getMaterials(detail).ebony,
   });
   // Step 5: pawns become the user-supplied rigged spearman (public/models/pawn) on a low pedestal.
-  const animator = createFigureAnimator(knights, {
+  const pawns = createFigureAnimator(knights, {
     type: 'pawn',
     materials: {
       body: (c) => getMaterials(detail)[c === 'white' ? 'ivory' : 'ebony'],
@@ -113,6 +115,9 @@ async function main(): Promise<void> {
     height: 0.5,
     weaponHand: 'RightHand',
   });
+  // Rooks become the user's Meshy hammer knight (public/models/pieces), a rigid statue: the whole
+  // figure tilts, leaps and squashes (the 'slam' strike); white gold aura, black obsidian + crimson.
+  const animator = createStatueAnimator(pawns, { type: 'rook', height: 0.95 });
   animator.idleSway = startTier !== 'off';
   const fx = createStrikeFx();
   scene.add(fx.group);
@@ -255,18 +260,24 @@ async function main(): Promise<void> {
       markShadowsDirty('piece-move');
     };
     charactersReady = Promise.all([
-      loadCharacterKit(`${import.meta.env.BASE_URL}models/quaternius-horse/Horse.glb`)
+      loadCharacterKit(`${import.meta.env.BASE_URL}${MODEL_ASSETS.horse.base}`)
         .then((kit) => {
           knights.kit = kit;
           join();
         })
         .catch((e: unknown) => console.warn('horse model unavailable, keeping procedural knights', e)),
-      loadFigureKit(`${import.meta.env.BASE_URL}models/pawn/Pawn.glb`)
+      loadFigureKit(`${import.meta.env.BASE_URL}${MODEL_ASSETS.pawn.base}`)
+        .then((kit) => {
+          pawns.kit = kit;
+          join();
+        })
+        .catch((e: unknown) => console.warn('pawn model unavailable, keeping procedural pawns', e)),
+      loadStatueKit(`${import.meta.env.BASE_URL}${MODEL_ASSETS.rook.base}`)
         .then((kit) => {
           animator.kit = kit;
           join();
         })
-        .catch((e: unknown) => console.warn('pawn model unavailable, keeping procedural pawns', e)),
+        .catch((e: unknown) => console.warn('rook model unavailable, keeping procedural rooks', e)),
     ]);
   }
 
