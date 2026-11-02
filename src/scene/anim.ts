@@ -29,6 +29,11 @@ export interface ClipParams {
 export const ATTACK_IMPACT = 0.6;
 export const ATTACK_ENTER = 0.82;
 
+/** Slam: wind-up ends (take-off) at this fraction; leap apex height and the hammer's forward lean at impact. */
+export const SLAM_LEAP = 0.3;
+export const SLAM_HEIGHT = 0.38;
+export const SLAM_LEAN = 0.45;
+
 export interface PieceAnimator {
   play(obj: Object3D, clip: Clip, params?: ClipParams): void;
   /** Victim is drawn toward `to` (world) over `duration` (the queen's vortex). */
@@ -91,6 +96,8 @@ interface AttackPose {
   readonly lean: number;
   /** Extra yaw on top of facing the target. */
   readonly yaw: number;
+  /** Squash (+) / stretch (-) of the whole piece, volume-preserving-ish; 0 or absent = none. */
+  readonly squash?: number;
 }
 
 /**
@@ -115,6 +122,28 @@ export function attackCurve(motion: StrikeMotion, peak: number, dist: number): (
         }
         const w = seg(k, I, 0.72);
         return { x: peak - 0.12 * Math.sin(Math.PI * w), y: 0, lean: 0.15 * (1 - w) - 0.12 * Math.sin(Math.PI * w), yaw: 0 };
+      };
+    case 'slam':
+      // Hammer slam (rigid figure): rear back with the hammer raised and crouch, leap onto the
+      // contact point, drive the hammer down on landing (forward lean + squash), hold, recover.
+      return (k) => {
+        if (k >= E) return { x: enter(k), y: 0, lean: 0, yaw: 0 };
+        if (k < SLAM_LEAP) {
+          const w = easeOut(k / SLAM_LEAP);
+          return { x: -0.1 * w, y: 0, lean: -0.3 * w, yaw: 0, squash: 0.1 * smooth(0.6 * SLAM_LEAP, SLAM_LEAP, k) };
+        }
+        if (k < I) {
+          const w = seg(k, SLAM_LEAP, I);
+          return {
+            x: -0.1 + (peak + 0.1) * easeInOut(w),
+            y: SLAM_HEIGHT * Math.sin(Math.PI * w),
+            lean: -0.3 + (0.3 + SLAM_LEAN) * easeIn(w),
+            yaw: 0,
+            squash: 0.1 * (1 - smooth(0, 0.15, w)) - 0.08 * Math.sin(Math.PI * w),
+          };
+        }
+        const w = seg(k, I, E);
+        return { x: peak, y: 0, lean: SLAM_LEAN * (1 - smooth(0.25, 1, w)), yaw: 0, squash: 0.14 * Math.exp(-5 * w) * Math.cos(3 * Math.PI * w) * (1 - w) };
       };
     case 'cast':
       // Levitate and lean back while the orb charges, recoil at the release, then glide in.
@@ -320,6 +349,7 @@ export function createProceduralAnimator(opts: ProceduralOptions = {}): Procedur
         const uz = dist > 1e-6 ? dz / dist : 0;
         const peak = Math.max(0, dist - Math.max(0, params.contact ?? 0));
         const tw = attackCurve(params.motion ?? 'lunge', peak, dist);
+        const home = homes.get(obj)!.scale;
         tweens.set(obj, {
           obj, duration, t: 0,
           apply(k) {
@@ -327,6 +357,8 @@ export function createProceduralAnimator(opts: ProceduralOptions = {}): Procedur
             const f = dist > 1e-6 ? Math.min(1, Math.max(0, c.x / dist)) : 1;
             obj.position.set(from.x + ux * c.x, from.y + (to.y - from.y) * f + c.y, from.z + uz * c.x);
             pose(obj, yawAt(Math.min(k * 1.6, 0.5)) + c.yaw, dx, dz, c.lean);
+            const sq = c.squash ?? 0;
+            obj.scale.set(home.x * (1 + sq / 2), home.y * (1 - sq), home.z * (1 + sq / 2));
           },
         });
         return;

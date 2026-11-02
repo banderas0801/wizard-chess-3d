@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BoxGeometry, Group, Mesh, MeshBasicMaterial, Vector3 } from 'three';
-import { ATTACK_ENTER, ATTACK_IMPACT, attackCurve, createProceduralAnimator, headingYaw } from './anim';
+import { ATTACK_ENTER, ATTACK_IMPACT, attackCurve, SLAM_LEAN, SLAM_LEAP, createProceduralAnimator, headingYaw } from './anim';
 import type { StrikeMotion } from './strike';
 
 const piece = (restYaw = 0): { root: Group; obj: Group } => {
@@ -80,7 +80,7 @@ describe('PieceAnimator (procedural)', () => {
     expect(a.moving).toBe(false);
   });
 
-  it.each<StrikeMotion>(['lunge', 'ram', 'cast', 'spin', 'slash'])('%s never goes past the contact point before stepping on, and ends on the square', (motion) => {
+  it.each<StrikeMotion>(['lunge', 'ram', 'cast', 'spin', 'slash', 'slam'])('%s never goes past the contact point before stepping on, and ends on the square', (motion) => {
     const dist = 1;
     const peak = 0.55;
     const curve = attackCurve(motion, peak, dist);
@@ -91,7 +91,32 @@ describe('PieceAnimator (procedural)', () => {
     expect(end.y).toBeCloseTo(0, 9);
     expect(end.lean).toBeCloseTo(0, 9);
     expect(Math.cos(end.yaw)).toBeCloseTo(1, 9); // facing the target again
-    if (motion === 'lunge' || motion === 'ram' || motion === 'slash') expect(curve(ATTACK_IMPACT).x).toBeCloseTo(peak, 6);
+    if (motion === 'lunge' || motion === 'ram' || motion === 'slash' || motion === 'slam') expect(curve(ATTACK_IMPACT).x).toBeCloseTo(peak, 6);
+  });
+
+  it('slam: rears back, leaps clear of the board, lands with the hammer forward and a squash, then settles', () => {
+    const curve = attackCurve('slam', 0.6, 1);
+    const windup = curve(SLAM_LEAP - 0.01);
+    expect(windup.lean).toBeLessThan(-0.2); // hammer raised behind
+    expect(windup.x).toBeLessThan(0);
+    expect(curve((SLAM_LEAP + ATTACK_IMPACT) / 2).y).toBeGreaterThan(0.3); // airborne
+    const land = curve(ATTACK_IMPACT);
+    expect(land.y).toBeCloseTo(0, 6);
+    expect(land.lean).toBeCloseTo(SLAM_LEAN, 6);
+    expect(land.squash).toBeGreaterThan(0.1);
+    expect(curve(ATTACK_ENTER).squash ?? 0).toBeCloseTo(0, 3);
+  });
+
+  it('slam squash is applied to the piece scale and gone when the attack ends', () => {
+    const a = createProceduralAnimator();
+    const { obj } = piece();
+    a.play(obj, 'attack', { to: new Vector3(1, 0, 0), duration: 1, motion: 'slam', contact: 0.4 });
+    run(a, ATTACK_IMPACT + 0.01, 0.01);
+    expect(obj.scale.y).toBeLessThan(0.92); // landed: squashed
+    expect(obj.scale.x).toBeGreaterThan(1.03);
+    run(a, 0.5);
+    expect(obj.scale.y).toBeCloseTo(1, 6);
+    expect(obj.position.x).toBeCloseTo(1, 6);
   });
 
   it('drag pulls a victim toward a point, and cancel puts it back', () => {
