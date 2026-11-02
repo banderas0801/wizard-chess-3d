@@ -3,6 +3,8 @@ import { Group, Mesh, MeshBasicMaterial, Quaternion, Vector3, type AnimationClip
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createProceduralAnimator } from './anim';
+import { TIMING } from './choreo';
+import { STRIKE_PROFILES } from './strike';
 import { buildCharacterKit, createCharacterAnimator, finishFor, lanceAngle, rearAngle, type CharacterKit } from './character';
 import { LANCE_COUCHED, LANCE_REST } from './rider';
 
@@ -100,6 +102,34 @@ describe('horse knight (Step 4b)', () => {
     expect(pivotOf(knight).rotation.x).toBe(0);
     expect(knight.getObjectByName('mount')!.position.x).toBe(0);
     expect(knight.position.length()).toBeCloseTo(0);
+  });
+
+  it('a horse taking a horse stops at the contact point until the victim has collapsed (no pass-through)', () => {
+    const root = new Group();
+    const attacker = piece('knight', 'white');
+    const victim = piece('knight', 'black', 0.75); // the stage stops the knight 0.75 short
+    root.add(attacker, victim);
+    const m = () => new MeshBasicMaterial();
+    const anim = createCharacterAnimator(createProceduralAnimator(), 'knight', { body: m, accent: m, eye: m });
+    anim.kit = kit;
+    anim.attachAll(root);
+    const { strike, impactAt, contact, motion } = STRIKE_PROFILES.knight;
+    anim.play(attacker, 'attack', { to: victim.position.clone(), duration: strike, motion, contact });
+    const dt = 1 / 60;
+    let t = 0;
+    let shattered = false;
+    let closest = Infinity;
+    for (; t < strike + 0.5; t += dt) {
+      if (!shattered && t >= strike * impactAt) {
+        anim.play(victim, 'shatter', { duration: TIMING.shatter });
+        shattered = true;
+      }
+      anim.update(dt);
+      if (victim.visible) closest = Math.min(closest, attacker.position.distanceTo(victim.position));
+    }
+    expect(closest).toBeGreaterThan(contact - 0.08); // muzzle meets the victim, never inside it
+    expect(victim.visible).toBe(false);
+    expect(attacker.position.distanceTo(victim.position)).toBeLessThan(1e-6); // then takes the square
   });
 
   it('shatter plays the death clip first, then hides the piece; cancel restores it', () => {

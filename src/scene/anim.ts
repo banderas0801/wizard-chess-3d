@@ -5,6 +5,7 @@ import {
   BufferGeometry, IcosahedronGeometry, Mesh, Object3D, Quaternion, Vector3, type Material,
 } from 'three';
 import { BOARD_TOP_Y } from './board';
+import type { StrikeMotion } from './strike';
 
 export type Clip = 'idle' | 'move' | 'attack' | 'shatter';
 
@@ -14,10 +15,24 @@ export interface ClipParams {
   readonly duration?: number;
   /** Arc height for a hop (knight); 0 = glide. */
   readonly hop?: number;
+  /** Attack body motion (default 'lunge'). */
+  readonly motion?: StrikeMotion;
+  /** Attack: the blow lands this far (world units) short of `to`; the piece steps on only after. */
+  readonly contact?: number;
 }
+
+/**
+ * Attack timeline, as fractions of the clip: the blow lands at IMPACT (the profile's impactAt is
+ * 0.6 for lunges; casts and spins hold still until then anyway) and the attacker only steps onto
+ * the victim's square from ENTER on, after the victim has collapsed (victim rigs hide by then).
+ */
+export const ATTACK_IMPACT = 0.6;
+export const ATTACK_ENTER = 0.82;
 
 export interface PieceAnimator {
   play(obj: Object3D, clip: Clip, params?: ClipParams): void;
+  /** Victim is drawn toward `to` (world) over `duration` (the queen's vortex). */
+  drag(obj: Object3D, to: Vector3, duration: number): void;
   /** Mated king topples over. */
   fall(obj: Object3D, duration: number): void;
   /** Advance all tweens. */
@@ -66,6 +81,81 @@ const wrapAngle = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
 
 /** Yaw that turns a piece's +x (its "forward", e.g. the knight's muzzle) toward (dx, dz). */
 export const headingYaw = (dx: number, dz: number): number => Math.atan2(-dz, dx);
+
+interface AttackPose {
+  /** Signed distance along from->to (world units). */
+  readonly x: number;
+  /** Extra height. */
+  readonly y: number;
+  /** Lean toward the target (+) or back (-), radians. */
+  readonly lean: number;
+  /** Extra yaw on top of facing the target. */
+  readonly yaw: number;
+}
+
+/**
+ * Body curve of one attack style. `peak` is where the blow lands (dist - contact): nothing but
+ * the final step-in, after ATTACK_ENTER, goes past it, so an attacker never passes through a
+ * victim that is still standing. Exported for tests.
+ */
+export function attackCurve(motion: StrikeMotion, peak: number, dist: number): (k: number) => AttackPose {
+  const I = ATTACK_IMPACT;
+  const E = ATTACK_ENTER;
+  const enter = (k: number, from = peak): number => from + (dist - from) * easeInOut((k - E) / (1 - E));
+  const seg = (k: number, a: number, b: number): number => Math.min(1, Math.max(0, (k - a) / (b - a)));
+  switch (motion) {
+    case 'ram':
+      // Back up, charge (rattling), crunch and jolt back, then roll on.
+      return (k) => {
+        if (k >= E) return { x: enter(k), y: 0, lean: 0, yaw: 0 };
+        if (k < 0.33) { const w = easeOut(k / 0.33); return { x: -0.3 * w, y: 0, lean: -0.1 * w, yaw: 0 }; }
+        if (k < I) {
+          const w = easeIn(seg(k, 0.33, I));
+          return { x: -0.3 + (peak + 0.3) * w, y: 0.012 * Math.abs(Math.sin(k * 60)), lean: -0.1 + 0.25 * w, yaw: 0 };
+        }
+        const w = seg(k, I, 0.72);
+        return { x: peak - 0.12 * Math.sin(Math.PI * w), y: 0, lean: 0.15 * (1 - w) - 0.12 * Math.sin(Math.PI * w), yaw: 0 };
+      };
+    case 'cast':
+      // Levitate and lean back while the orb charges, recoil at the release, then glide in.
+      return (k) => {
+        const lift = 0.14 * smooth(0, 0.3, k) * (1 - smooth(I + 0.05, E + 0.08, k));
+        const recoil = k >= I ? -0.22 * Math.exp(-(k - I) * 14) * (1 - smooth(E, 1, k)) : 0;
+        const x = k >= E ? enter(k, 0) : 0;
+        return { x, y: lift, lean: -0.12 * smooth(0.05, 0.4, k) * (1 - smooth(I, E, k)) + recoil, yaw: 0 };
+      };
+    case 'spin':
+      // Rise and whirl (two full turns, ends facing the target), then glide onto the square.
+      return (k) => {
+        const lift = 0.12 * smooth(0, 0.25, k) * (1 - smooth(I + 0.05, E + 0.1, k));
+        return { x: k >= E ? enter(k, 0) : 0, y: lift, lean: 0.08 * Math.sin(Math.PI * seg(k, 0, I)), yaw: 4 * Math.PI * easeInOut(seg(k, 0.05, I)) };
+      };
+    case 'slash':
+      // Coil (turn away), step in with a fast cross-body swing, hold the follow-through.
+      return (k) => {
+        if (k >= E) return { x: enter(k), y: 0, lean: 0, yaw: 0.7 * (1 - seg(k, E, 1)) };
+        if (k < 0.35) { const w = easeOut(k / 0.35); return { x: -0.08 * w, y: 0, lean: -0.15 * w, yaw: -0.6 * w }; }
+        if (k < I) {
+          const w = easeIn(seg(k, 0.35, I));
+          return { x: -0.08 + (peak + 0.08) * w, y: 0.04 * Math.sin(Math.PI * w), lean: -0.15 + 0.45 * w, yaw: -0.6 + 1.5 * easeIn(seg(k, 0.48, I)) };
+        }
+        return { x: peak, y: 0, lean: 0.3 * (1 - seg(k, I, E)), yaw: 0.9 - 0.2 * seg(k, I, E) };
+      };
+    case 'lunge':
+    default:
+      // Wind-up (rear back), lunge to the contact point, bounce off it, then step on.
+      return (k) => {
+        if (k >= E) return { x: enter(k), y: 0, lean: 0, yaw: 0 };
+        if (k < 0.3) { const w = easeOut(k / 0.3); return { x: -0.18 * w, y: 0, lean: -0.22 * w, yaw: 0 }; }
+        if (k < I) {
+          const w = seg(k, 0.3, I);
+          return { x: -0.18 + (peak + 0.18) * easeIn(w), y: 0.08 * Math.sin(Math.PI * w), lean: -0.22 + 0.55 * easeIn(w), yaw: 0 };
+        }
+        const w = seg(k, I, E);
+        return { x: peak - 0.07 * Math.sin(Math.PI * w), y: 0, lean: 0.33 * (1 - easeOut(w)) * Math.cos(Math.PI * 2 * w), yaw: 0 };
+      };
+  }
+}
 
 /** Deterministic PRNG so tests (and replays) shatter the same way. */
 function mulberry32(seed: number): () => number {
@@ -121,6 +211,26 @@ export function createProceduralAnimator(opts: ProceduralOptions = {}): Procedur
     axis.set(dirZ, 0, -dirX);
     if (axis.lengthSq() < 1e-9 || lean === 0) obj.quaternion.copy(qYaw);
     else obj.quaternion.copy(qLean.setFromAxisAngle(axis.normalize(), lean).multiply(qYaw));
+  };
+
+  // Chariot wheels (rook) roll with the distance travelled along the piece's own forward (+x).
+  const lastPos = new WeakMap<Object3D, Vector3>();
+  const fwd = new Vector3();
+  const rollWheels = (obj: Object3D): void => {
+    const wheels = obj.userData.wheels as Object3D[] | undefined;
+    if (!wheels || wheels.length === 0) return;
+    const last = lastPos.get(obj);
+    if (!last) {
+      lastPos.set(obj, obj.position.clone());
+      return;
+    }
+    {
+      fwd.set(1, 0, 0).applyQuaternion(obj.quaternion).setY(0).normalize(); // ignore lean
+      const d = (obj.position.x - last.x) * fwd.x + (obj.position.z - last.z) * fwd.z;
+      const r = (obj.userData.wheelRadius as number | undefined) ?? 0.15;
+      for (const w of wheels) w.rotation.z -= d / r;
+      last.copy(obj.position);
+    }
   };
 
   const clearFragments = (): void => {
@@ -205,31 +315,18 @@ export function createProceduralAnimator(opts: ProceduralOptions = {}): Procedur
       }
 
       if (clip === 'attack') {
-        // Wind-up (rear back), lunge (through the target), recoil (bounce back and settle on it).
         const duration = params.duration ?? 0.5;
         const ux = dist > 1e-6 ? dx / dist : 0;
         const uz = dist > 1e-6 ? dz / dist : 0;
+        const peak = Math.max(0, dist - Math.max(0, params.contact ?? 0));
+        const tw = attackCurve(params.motion ?? 'lunge', peak, dist);
         tweens.set(obj, {
           obj, duration, t: 0,
           apply(k) {
-            let s: number; // signed progress along from->to (can overshoot / go negative)
-            let lean: number;
-            if (k < 0.3) {
-              const w = easeOut(k / 0.3);
-              s = -0.18 * w / Math.max(dist, 0.2);
-              lean = -0.22 * w;
-            } else if (k < 0.6) {
-              const w = easeIn((k - 0.3) / 0.3);
-              s = -0.18 / Math.max(dist, 0.2) + (1.12 + 0.18 / Math.max(dist, 0.2)) * w;
-              lean = -0.22 + 0.55 * w;
-            } else {
-              const w = (k - 0.6) / 0.4;
-              s = 1 + 0.12 * Math.cos(Math.PI * 1.5 * w) * (1 - w);
-              lean = 0.33 * (1 - easeOut(w)) * Math.cos(Math.PI * 2 * w);
-            }
-            obj.position.set(from.x + ux * dist * s, from.y + (to.y - from.y) * Math.min(1, Math.max(0, s)), from.z + uz * dist * s);
-            if (k >= 0.3 && k < 0.6) obj.position.y += 0.08 * Math.sin(Math.PI * (k - 0.3) / 0.3);
-            pose(obj, yawAt(Math.min(k * 1.6, 0.5)) , dx, dz, lean);
+            const c = tw(k);
+            const f = dist > 1e-6 ? Math.min(1, Math.max(0, c.x / dist)) : 1;
+            obj.position.set(from.x + ux * c.x, from.y + (to.y - from.y) * f + c.y, from.z + uz * c.x);
+            pose(obj, yawAt(Math.min(k * 1.6, 0.5)) + c.yaw, dx, dz, c.lean);
           },
         });
         return;
@@ -240,6 +337,23 @@ export function createProceduralAnimator(opts: ProceduralOptions = {}): Procedur
       tweens.delete(obj);
       obj.visible = false;
       spawnFragments(obj, duration);
+    },
+
+    drag(obj, target, duration) {
+      remember(obj);
+      const from = obj.position.clone();
+      const to = new Vector3(target.x, from.y, target.z);
+      const yaw = restYaw(obj);
+      tweens.set(obj, {
+        obj, duration, t: 0,
+        apply(k) {
+          // Sucked in: slow start, accelerating, wobbling and lifting off the board.
+          const e = easeIn(k);
+          obj.position.lerpVectors(from, to, e);
+          obj.position.y = from.y + 0.12 * e + 0.015 * Math.sin(k * 40) * k;
+          pose(obj, yaw + 2.5 * e * e, to.x - from.x, to.z - from.z, 0.25 * e);
+        },
+      });
     },
 
     fall(obj, duration) {
@@ -264,8 +378,13 @@ export function createProceduralAnimator(opts: ProceduralOptions = {}): Procedur
       clock += dt;
       for (const tw of [...tweens.values()]) {
         tw.t = Math.min(tw.duration, tw.t + dt);
+        rollWheels(tw.obj); // first call only records the start
         tw.apply(tw.duration > 0 ? tw.t / tw.duration : 1);
-        if (tw.t >= tw.duration) tweens.delete(tw.obj);
+        rollWheels(tw.obj);
+        if (tw.t >= tw.duration) {
+          tweens.delete(tw.obj);
+          lastPos.delete(tw.obj);
+        }
       }
       if (fragments.length > 0) {
         fragT += dt;

@@ -315,11 +315,15 @@ export function createCharacterAnimator(
       // shatter: collapse first, then burst into debris.
       const duration = params.duration ?? 0.6;
       settle(rig);
-      fade(rig, 'death', 0.06, clipLen('death') / (duration * 0.7), true);
+      // Collapse fast: the attacker steps onto this square soon after impact (ATTACK_ENTER).
+      fade(rig, 'death', 0.06, clipLen('death') / (duration * 0.4), true);
       rig.dead = true;
-      rig.shatterIn = duration * 0.55;
-      rig.shatterDuration = duration * 0.45;
+      rig.shatterIn = duration * 0.35;
+      rig.shatterDuration = duration * 0.65;
       rig.hold = duration;
+    },
+    drag(obj, to, duration) {
+      base.drag(obj, to, duration);
     },
     fall(obj, duration) {
       const rig = rigs.get(obj);

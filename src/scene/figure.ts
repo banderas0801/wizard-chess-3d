@@ -203,7 +203,7 @@ export function thrustAngle(k: number, max: number): number {
 
 const FADE = 0.15;
 /** Share of the shatter phase spent on the hit reaction before the figure bursts. */
-const HIT_SHARE = 0.55;
+const HIT_SHARE = 0.35; // gone before the attacker steps onto the square (ATTACK_ENTER)
 
 export function createFigureAnimator(
   base: PieceAnimator & { attachAll?(root: Object3D): void },
@@ -362,6 +362,9 @@ export function createFigureAnimator(
       rig.shatterIn = duration * HIT_SHARE;
       rig.shatterDuration = duration * (1 - HIT_SHARE);
       rig.hold = duration;
+    },
+    drag(obj, to, duration) {
+      base.drag(obj, to, duration);
     },
     fall(obj, duration) {
       const rig = rigs.get(obj);

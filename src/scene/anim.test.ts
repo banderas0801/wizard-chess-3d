@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BoxGeometry, Group, Mesh, MeshBasicMaterial, Vector3 } from 'three';
-import { createProceduralAnimator, headingYaw } from './anim';
+import { ATTACK_ENTER, ATTACK_IMPACT, attackCurve, createProceduralAnimator, headingYaw } from './anim';
+import type { StrikeMotion } from './strike';
 
 const piece = (restYaw = 0): { root: Group; obj: Group } => {
   const root = new Group();
@@ -77,5 +78,44 @@ describe('PieceAnimator (procedural)', () => {
     expect(p2.obj.visible).toBe(true);
     expect(p1.root.children.length).toBe(2);
     expect(a.moving).toBe(false);
+  });
+
+  it.each<StrikeMotion>(['lunge', 'ram', 'cast', 'spin', 'slash'])('%s never goes past the contact point before stepping on, and ends on the square', (motion) => {
+    const dist = 1;
+    const peak = 0.55;
+    const curve = attackCurve(motion, peak, dist);
+    for (let k = 0; k < ATTACK_ENTER; k += 0.005) expect(curve(k).x).toBeLessThanOrEqual(peak + 1e-9);
+    for (let k = 0; k < 1; k += 0.002) expect(Math.abs(curve(k + 0.002).x - curve(k).x)).toBeLessThan(0.05); // no teleports
+    const end = curve(1);
+    expect(end.x).toBeCloseTo(dist, 9);
+    expect(end.y).toBeCloseTo(0, 9);
+    expect(end.lean).toBeCloseTo(0, 9);
+    expect(Math.cos(end.yaw)).toBeCloseTo(1, 9); // facing the target again
+    if (motion === 'lunge' || motion === 'ram' || motion === 'slash') expect(curve(ATTACK_IMPACT).x).toBeCloseTo(peak, 6);
+  });
+
+  it('drag pulls a victim toward a point, and cancel puts it back', () => {
+    const a = createProceduralAnimator();
+    const { obj } = piece();
+    a.drag(obj, new Vector3(-0.4, 0, 0), 0.5);
+    run(a, 0.25);
+    expect(obj.position.x).toBeLessThan(0);
+    expect(obj.position.x).toBeGreaterThan(-0.2); // slow start: sucked in, accelerating
+    run(a, 0.3);
+    expect(obj.position.x).toBeCloseTo(-0.4, 6);
+    a.cancel();
+    expect(obj.position.length()).toBeLessThan(1e-9);
+  });
+
+  it('rolls chariot wheels with the distance travelled', () => {
+    const a = createProceduralAnimator();
+    const { obj } = piece();
+    const wheel = new Group();
+    obj.add(wheel);
+    obj.userData.wheels = [wheel];
+    obj.userData.wheelRadius = 0.2;
+    a.play(obj, 'move', { to: new Vector3(2, 0, 0), duration: 0.6 });
+    run(a, 0.7);
+    expect(wheel.rotation.z).toBeCloseTo(-2 / 0.2, 1); // rolled forward 2 units
   });
 });
