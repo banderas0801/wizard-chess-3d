@@ -15,7 +15,9 @@ export interface ModelAsset {
 
 export const MODEL_ASSETS = {
   horse: { kind: 'piece', base: 'models/quaternius-horse/Horse.glb' },
-  pawn: { kind: 'piece', base: 'models/pawn/Pawn.glb' },
+  pawn: { kind: 'piece', base: 'models/pieces/pawn_white.glb' },
+  /** Previous rigged spearman, now unused by the game (kept for scene/figure.ts and its test). */
+  spearman: { kind: 'piece', base: 'models/pawn/Pawn.glb' },
   rook: { kind: 'piece', base: 'models/pieces/rook_white.glb' },
 } as const satisfies Readonly<Record<string, ModelAsset>>;
 
