@@ -47,16 +47,32 @@ export type AssetName = keyof typeof MODEL_ASSETS;
  * at the right size. Order: king > queen > rook, knight, bishop > pawn.
  */
 export const TARGET_HEIGHT: Readonly<Record<PieceType, number>> = {
-  king: 1.3,
-  queen: 1.09,
-  bishop: 0.95,
-  rook: 0.98,
-  knight: 0.9,
-  pawn: 0.8,
+  king: 1.65,
+  queen: 1.42,
+  rook: 1.27,
+  bishop: 1.24,
+  knight: 1.17,
+  pawn: 1.04,
 };
 
-/** Widest a sculpted figure may spread across its square (fraction of the square), so it never overflows. */
-export const MAX_FOOTPRINT = 0.78;
+/**
+ * Widest a sculpted figure may spread (the circle around its x/z extent, as a fraction of the square),
+ * so it never overflows. Below 1: two neighbours' circles can't meet even at worst.
+ */
+export const MAX_FOOTPRINT = 0.94;
+
+/** Height of the statues' turned pedestal top, where a figure's feet stand (board squares). */
+export const PEDESTAL_TOP = 0.26;
+
+/** Foot diameter of each statue's pedestal, as a fraction of the square (about 75–80%). */
+export const PEDESTAL_DIAMETER: Readonly<Record<PieceType, number>> = {
+  king: 0.8,
+  queen: 0.8,
+  rook: 0.78,
+  knight: 0.78,
+  bishop: 0.76,
+  pawn: 0.72,
+};
 
 const MB = 1024 * 1024;
 /** Download budgets (bytes): per file by kind, and for every listed file together. */
