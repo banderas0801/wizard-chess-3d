@@ -91,6 +91,17 @@ export const TIMING = {
   gap: 1.0,
 } as const;
 
+/**
+ * Longest animation step per frame. A hitch (shader compile, GC, tab switch) would otherwise make
+ * pieces and effects teleport; instead the animation briefly runs slow. The camera keeps real dt.
+ */
+export const MAX_ANIM_DT = 1 / 30;
+
+/** Animation seconds for one frame of `realDt` real seconds, before time scaling. */
+export function animDt(realDt: number): number {
+  return Math.min(Math.max(0, realDt), MAX_ANIM_DT);
+}
+
 const squareDist = (a: Square, b: Square): number =>
   Math.hypot(a.charCodeAt(0) - b.charCodeAt(0), a.charCodeAt(1) - b.charCodeAt(1));
 
