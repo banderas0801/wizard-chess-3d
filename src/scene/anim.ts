@@ -356,7 +356,10 @@ export function createProceduralAnimator(opts: ProceduralOptions = {}): Procedur
             const c = tw(k);
             const f = dist > 1e-6 ? Math.min(1, Math.max(0, c.x / dist)) : 1;
             obj.position.set(from.x + ux * c.x, from.y + (to.y - from.y) * f + c.y, from.z + uz * c.x);
-            pose(obj, yawAt(Math.min(k * 1.6, 0.5)) + c.yaw, dx, dz, c.lean);
+            // Turn to face the victim early, then ease back to the rest heading during the
+            // step-in so the commit (which resets rotation to restYaw) lands without a snap.
+            const yaw = rest + face * smooth(0, 0.2, k * 1.6) * (1 - smooth(ATTACK_ENTER, 1, k));
+            pose(obj, yaw + c.yaw, dx, dz, c.lean);
             const sq = c.squash ?? 0;
             obj.scale.set(home.x * (1 + sq / 2), home.y * (1 - sq), home.z * (1 + sq / 2));
           },
