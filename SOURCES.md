@@ -19,5 +19,16 @@ Poly Haven licence: CC0 1.0 Universal, https://polyhaven.com/license.
 In history only (removed in 508bed8, still in commit d9017e9 on `origin/builder/main`):
 `public/hdri/studio_small_08_1k.hdr`, Studio Small 08, Sergej Majboroda, https://polyhaven.com/a/studio_small_08, CC0 1.0.
 
-Not third-party: board, piece and gold surfaces are procedural (`src/scene/materials.ts`); the strike fx and debris are generated in code.
+Not third-party: board, piece and gold surfaces are procedural (`src/scene/materials.ts`); the strike fx sprites, beams, blades and debris are generated in code (`src/fx/`).
 No Mixamo, Stockfish, chess.js or wizard-chess assets are used.
+
+## Code dependencies
+
+Runtime npm packages and their licences (allowed: MIT, BSD, Apache-2.0, zlib).
+
+| Package | Version | Used for | Licence | Source |
+|---|---|---|---|---|
+| `three` | ^0.187.0 | renderer, scene, post-processing passes | MIT | https://github.com/mrdoob/three.js |
+| `camera-controls` | ^3.1.2 | orbit camera rig | MIT | https://github.com/yomotsu/camera-controls |
+| `three.quarks` | ^0.17.1 | strike particle systems (`src/fx/strike-fx.ts`) | MIT (Copyright (c) 2019 Forrest Sun) | https://github.com/Alchemist0823/three.quarks |
+| `quarks.core` | 0.17.1 (dependency of three.quarks) | particle simulation core | MIT | https://github.com/Alchemist0823/three.quarks |
