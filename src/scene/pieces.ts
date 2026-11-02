@@ -254,14 +254,22 @@ function knight(r: Res): Part[] {
 
 const BUILDERS: Record<PieceType, (r: Res) => Part[]> = { pawn, rook, bishop, queen, king, knight };
 
+/**
+ * The turned pieces are modelled at their original size and scaled up uniformly (from the board) to
+ * match TARGET_HEIGHT in scene/assets, so a fallback stands as tall as the statue it replaces.
+ */
+export const TURNED_SCALE = 1.3;
+
 /** Height of the pawn's character pedestal top (where a rigged figure's soles stand). */
 export const PAWN_PEDESTAL_TOP = 0.2;
+/** Radius of that pedestal's foot (main.ts widens it per piece to PEDESTAL_DIAMETER). */
+export const PAWN_PEDESTAL_FOOT = 0.27;
 
 /** Low turned pedestal for a rigged pawn figure: the pawn's own foot, a flat top and a gold rim. */
 function pawnPedestal(r: Res): Part[] {
   const top = PAWN_PEDESTAL_TOP;
-  const p = new Profile().foot(0.27, 0.14, 0.17).curve([[0.18, 0.17], [0.19, top - 0.015]], 6).to(0.19, top).corner().to(0, top);
-  return [{ geo: lathe(p, r), finish: 'body' }, footRing(0.27, 0.14, r), ring(0.192, top - 0.006, 0.011, r)];
+  const p = new Profile().foot(PAWN_PEDESTAL_FOOT, 0.14, 0.17).curve([[0.18, 0.17], [0.19, top - 0.015]], 6).to(0.19, top).corner().to(0, top);
+  return [{ geo: lathe(p, r), finish: 'body' }, footRing(PAWN_PEDESTAL_FOOT, 0.14, r), ring(0.192, top - 0.006, 0.011, r)];
 }
 
 const pedestalCache = new Map<Detail, Part[]>();
@@ -287,7 +295,11 @@ const partCache = new Map<string, Part[]>();
 export function pieceParts(type: PieceType, detail: Detail): readonly Part[] {
   const key = `${type}:${detail}`;
   let parts = partCache.get(key);
-  if (!parts) partCache.set(key, (parts = BUILDERS[type](RES[detail])));
+  if (!parts) {
+    const scale = new Matrix4().makeScale(TURNED_SCALE, TURNED_SCALE, TURNED_SCALE);
+    parts = BUILDERS[type](RES[detail]).map((p) => ({ ...p, matrix: p.matrix ? scale.clone().multiply(p.matrix) : scale }));
+    partCache.set(key, parts);
+  }
   return parts;
 }
 
@@ -342,7 +354,7 @@ export function createPieces(initialDetail: Detail = 'high'): PieceLayer {
       phase: phase / 1000, // idle-sway offset so pieces don't breathe in lockstep
       height: new Box3().setFromObject(obj).max.y,
       wheels: obj.children.filter((c) => c.userData.wheel === true),
-      wheelRadius: ROOK_WHEEL_RADIUS,
+      wheelRadius: ROOK_WHEEL_RADIUS * TURNED_SCALE,
     };
     return obj;
   };
