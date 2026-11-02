@@ -80,7 +80,7 @@ export interface ChoreoHost<S> {
   onIdle?(reason: 'settled' | 'cancelled'): void;
 }
 
-/** Seconds. A capture runs ~2.5-3 s end to end (approach + strike + shatter + settle). */
+/** Seconds. A capture runs ~2.2-3 s end to end (approach + strike + shatter + settle). */
 export const TIMING = {
   minMove: 0.6,
   maxMove: 1.2,
@@ -161,7 +161,9 @@ export function createChoreographer<S>(host: ChoreoHost<S>): Choreographer<S> {
         cues('strike', prof.strike * prof.impactAt);
         return;
       case 'strike':
-        go('shatter', Math.max(TIMING.shatter, prof.strike * (1 - prof.impactAt)));
+        // Exactly the rest of the attack clip: settle starts as the attacker lands, no dead hold.
+        // The debris keeps flying for TIMING.shatter, past the commit.
+        go('shatter', prof.strike * (1 - prof.impactAt));
         host.stage.shatter(p.capture!.id, TIMING.shatter);
         cues('impact');
         return;
