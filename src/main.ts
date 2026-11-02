@@ -6,8 +6,8 @@ import { createPost } from './render/post';
 import { createQualityGovernor, parseTier, type QualityTier } from './render/quality';
 import { createProceduralAnimator } from './scene/anim';
 import { createCharacterAnimator, loadCharacterKit } from './scene/character';
-import { createStatueAnimator, loadStatueKit } from './scene/statue';
-import { MODEL_ASSETS } from './scene/assets';
+import { createStatueAnimator, loadStatueKit, type StatueKit } from './scene/statue';
+import { MODEL_ASSETS, type AssetName } from './scene/assets';
 import { createChoreographer, TIMING } from './scene/choreo';
 import { SHAKE_SCALE, shakeAllowed as shakeGate, type Side } from './fx/budget';
 import { createStrikeFx } from './fx/strike-fx';
@@ -113,7 +113,14 @@ async function main(): Promise<void> {
   const pawns = createStatueAnimator(knights, { type: 'pawn', pedestal: pedestal(1), pedestalTop: PAWN_PEDESTAL_TOP });
   // Rooks become the user's Meshy hammer knight (public/models/pieces), a rigid statue: the whole
   // figure tilts, leaps and squashes (the 'slam' strike); white gold aura, black obsidian + crimson.
-  const animator = createStatueAnimator(pawns, { type: 'rook', pedestal: pedestal(1.15), pedestalTop: PAWN_PEDESTAL_TOP });
+  const rooks = createStatueAnimator(pawns, { type: 'rook', pedestal: pedestal(1.15), pedestalTop: PAWN_PEDESTAL_TOP });
+  // The rest of the court are Meshy statues on the same layer (same side finishes, strike profiles unchanged);
+  // each pedestal is widened to that piece's procedural foot (pawn foot 0.27 = 1). The knight statue replaces
+  // the rigged horse, which is only loaded as its fallback (see charactersReady), so the two never both attach.
+  const knightStatues = createStatueAnimator(rooks, { type: 'knight', pedestal: pedestal(1.15), pedestalTop: PAWN_PEDESTAL_TOP });
+  const bishops = createStatueAnimator(knightStatues, { type: 'bishop', pedestal: pedestal(1.07), pedestalTop: PAWN_PEDESTAL_TOP });
+  const queens = createStatueAnimator(bishops, { type: 'queen', pedestal: pedestal(1.22), pedestalTop: PAWN_PEDESTAL_TOP });
+  const animator = createStatueAnimator(queens, { type: 'king', pedestal: pedestal(1.26), pedestalTop: PAWN_PEDESTAL_TOP });
   animator.idleSway = startTier !== 'off';
   const fx = createStrikeFx();
   scene.add(fx.group);
@@ -255,25 +262,34 @@ async function main(): Promise<void> {
       idleAll();
       markShadowsDirty('piece-move');
     };
-    charactersReady = Promise.all([
-      loadCharacterKit(`${import.meta.env.BASE_URL}${MODEL_ASSETS.horse.base}`)
+    const url = (name: AssetName): string => `${import.meta.env.BASE_URL}${MODEL_ASSETS[name].base}`;
+    const statue = (name: 'pawn' | 'rook' | 'bishop' | 'queen' | 'king', layer: { kit: StatueKit | null }): Promise<void> =>
+      loadStatueKit(url(name))
         .then((kit) => {
-          knights.kit = kit;
+          layer.kit = kit;
           join();
+        })
+        .catch((e: unknown) => console.warn(`${name} model unavailable, keeping procedural ${name}s`, e));
+    charactersReady = Promise.all([
+      // Knight: the Meshy statue; if it fails, the rigged horse + rider; if that fails too, the turned knight.
+      loadStatueKit(url('knight'))
+        .then((kit) => {
+          knightStatues.kit = kit;
+          join();
+        })
+        .catch((e: unknown) => {
+          console.warn('knight model unavailable, falling back to the horse', e);
+          return loadCharacterKit(url('horse')).then((kit) => {
+            knights.kit = kit;
+            join();
+          });
         })
         .catch((e: unknown) => console.warn('horse model unavailable, keeping procedural knights', e)),
-      loadStatueKit(`${import.meta.env.BASE_URL}${MODEL_ASSETS.pawn.base}`)
-        .then((kit) => {
-          pawns.kit = kit;
-          join();
-        })
-        .catch((e: unknown) => console.warn('pawn model unavailable, keeping procedural pawns', e)),
-      loadStatueKit(`${import.meta.env.BASE_URL}${MODEL_ASSETS.rook.base}`)
-        .then((kit) => {
-          animator.kit = kit;
-          join();
-        })
-        .catch((e: unknown) => console.warn('rook model unavailable, keeping procedural rooks', e)),
+      statue('pawn', pawns),
+      statue('rook', rooks),
+      statue('bishop', bishops),
+      statue('queen', queens),
+      statue('king', animator),
     ]);
   }
 
