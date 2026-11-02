@@ -1,18 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { Box3, BoxGeometry, Group, Mesh, MeshBasicMaterial, MeshStandardMaterial, Texture, Vector3, type Object3D } from 'three';
 import { ATTACK_IMPACT, createProceduralAnimator } from './anim';
-import { MAX_FOOTPRINT, TARGET_HEIGHT } from './assets';
-import { buildStatueKit, createStatueAnimator, finishMaterial, fitStatue, glowPulse, obsidianShader, STATUE_FINISH, type StatueKit } from './statue';
+import { MAX_FOOTPRINT, STATUE_HEIGHT } from './assets';
+import { buildStatueKit, createStatueAnimator, finishMaterial, fitStatue, glowPulse, obsidianShader, STATUE_FINISH, STATUE_REST_YAW, type StatueKit } from './statue';
 
-const HEIGHT = TARGET_HEIGHT.rook;
-const TOP = 0.2;
-/** Stand-in pedestal: a 0.2-tall disc, tagged with its side. */
-const pedestal = (c: 'white' | 'black'): Object3D => {
-  const g = new Group();
-  g.userData.side = c;
-  g.add(new Mesh(new BoxGeometry(0.5, TOP, 0.5).translate(0, TOP / 2, 0), new MeshBasicMaterial()));
-  return g;
-};
+const HEIGHT = STATUE_HEIGHT.rook;
 
 /** Stand-in for the Meshy rook: 1.9 tall, centred on the origin, off-centre in x/z like a shield arm. */
 const template = (): Object3D => {
@@ -21,7 +13,7 @@ const template = (): Object3D => {
   node.scale.setScalar(0.95);
   const mat = new MeshStandardMaterial({ map: new Texture() });
   mat.name = 'BakedMaterial';
-  const body = new Mesh(new BoxGeometry(1.2, 2, 0.9), mat);
+  const body = new Mesh(new BoxGeometry(0.6, 2, 0.4), mat);
   body.position.set(0.1, 0, -0.05);
   node.add(body);
   scene.add(node);
@@ -38,7 +30,7 @@ const piece = (type: string, color: 'white' | 'black', x = 0): Object3D => {
 
 const setup = (): { kit: StatueKit; root: Group; a: ReturnType<typeof createStatueAnimator> } => {
   const kit = buildStatueKit(template());
-  const a = createStatueAnimator(createProceduralAnimator(), { type: 'rook', pedestal, pedestalTop: TOP });
+  const a = createStatueAnimator(createProceduralAnimator(), { type: 'rook' });
   a.kit = kit;
   const root = new Group();
   root.add(piece('rook', 'white'), piece('rook', 'black', 2), piece('pawn', 'white', 4));
@@ -57,7 +49,7 @@ describe('statue (rigid Meshy rook)', () => {
     expect(() => buildStatueKit(new Group())).toThrow();
   });
 
-  it('replaces only rooks, idempotently, standing on its pedestal at the table height and centred', () => {
+  it('replaces only rooks, idempotently, standing straight on the square (no pedestal) at the table height and centred', () => {
     const { root, a } = setup();
     a.attachAll(root);
     expect(a.count).toBe(2);
@@ -67,11 +59,10 @@ describe('statue (rigid Meshy rook)', () => {
     expect(w.getObjectByName('aura')).toBeDefined();
     expect(w.userData.wheels).toEqual([]);
     w.updateMatrixWorld(true);
-    const ped = w.getObjectByName('pedestal')!;
-    expect(ped.userData.side).toBe('white');
-    expect((root.children[1] as Object3D).getObjectByName('pedestal')!.userData.side).toBe('black');
+    expect(w.getObjectByName('pedestal')).toBeUndefined();
+    expect(w.children.filter((c) => c.visible).map((c) => c.name).sort()).toEqual(['aura', 'mount']);
     const box = new Box3().setFromObject(w.getObjectByName('statue')!);
-    expect(box.min.y).toBeCloseTo(TOP, 6); // feet on the pedestal top
+    expect(box.min.y).toBeCloseTo(0, 6); // feet on the board
     expect(box.max.y).toBeCloseTo(HEIGHT, 6);
     expect(w.userData.height).toBeCloseTo(HEIGHT, 6);
     const c = box.getCenter(new Vector3());
@@ -81,7 +72,7 @@ describe('statue (rigid Meshy rook)', () => {
 
   it('the two sides face each other at rest, and turn to face their target mid-move or mid-strike', () => {
     // Meshy statues face +z in model space; white stands at +z (rank 1), black at -z (rank 8).
-    const a = createStatueAnimator(createProceduralAnimator(), { type: 'rook', pedestal, pedestalTop: TOP });
+    const a = createStatueAnimator(createProceduralAnimator(), { type: 'rook' });
     a.kit = buildStatueKit(template());
     const root = new Group();
     const w = piece('rook', 'white');
@@ -142,15 +133,49 @@ describe('statue (rigid Meshy rook)', () => {
     expect(wm.userData.obsidian).toBeUndefined();
   });
 
-  it('fits by height, or shrinks so the footprint stays inside the square', () => {
-    const tall = new Box3(new Vector3(-0.5, 0, -0.5), new Vector3(0.5, 2, 0.5));
-    const t = fitStatue(tall, 'pawn', TOP);
-    expect(t.scale).toBeCloseTo((TARGET_HEIGHT.pawn - TOP) / 2, 6);
-    expect(t.offset[1]).toBeCloseTo(TOP, 6); // min.y = 0: feet land on the top
-    const wide = new Box3(new Vector3(-2, 0, -1), new Vector3(2, 1, 1));
-    const w = fitStatue(wide, 'rook', TOP);
-    expect(2 * Math.hypot(2, 1) * w.scale).toBeCloseTo(MAX_FOOTPRINT, 6);
-    expect(w.scale).toBeLessThan((TARGET_HEIGHT.rook - TOP) / 1);
+  it('fits by height, or shrinks so the turned footprint stays inside the square', () => {
+    const kitOf = (b: Box3): Pick<StatueKit, 'bounds' | 'footprint'> => ({
+      bounds: b,
+      footprint: Float32Array.from([b.min.x, b.min.z, b.max.x, b.min.z, b.max.x, b.max.z, b.min.x, b.max.z]),
+    });
+    const tall = new Box3(new Vector3(-0.1, 0.5, -0.1), new Vector3(0.1, 2.5, 0.1));
+    const t = fitStatue(kitOf(tall), 'pawn');
+    expect(t.scale).toBeCloseTo(STATUE_HEIGHT.pawn / 2, 6);
+    expect(t.offset[1]).toBeCloseTo(-0.5 * t.scale, 6); // min.y lands on the board
+    // Unturned, a 4 x 2 footprint is capped by its width; turned a quarter, by the same side.
+    const wide = kitOf(new Box3(new Vector3(-2, 0, -1), new Vector3(2, 1, 1)));
+    expect(fitStatue(wide, 'rook', 0).scale).toBeCloseTo(MAX_FOOTPRINT / 4, 6);
+    expect(fitStatue(wide, 'rook', Math.PI / 2).scale).toBeCloseTo(MAX_FOOTPRINT / 4, 6);
+    // Off-centre footprint: the offset brings its centre, turned to the rest yaw, onto the square's centre.
+    const off = kitOf(new Box3(new Vector3(0.2, 0, 0.1), new Vector3(0.4, 1, 0.3)));
+    const f = fitStatue(off, 'rook');
+    const g = new Group();
+    g.rotation.y = STATUE_REST_YAW;
+    const m = new Mesh(new BoxGeometry(0.2, 1, 0.2).translate(0.3, 0.5, 0.2), new MeshBasicMaterial());
+    m.scale.setScalar(f.scale);
+    m.position.set(...f.offset);
+    g.add(m);
+    g.updateMatrixWorld(true);
+    const c = new Box3().setFromObject(m).getCenter(new Vector3());
+    expect(Math.hypot(c.x, c.z)).toBeLessThan(1e-6);
+  });
+
+  it('a strike never sinks the statue into the board (no pedestal to hide it)', () => {
+    const { root, a } = setup();
+    const w = root.children[0]!;
+    const statue = w.getObjectByName('statue')!;
+    let low = Infinity;
+    for (const motion of ['lunge', 'ram', 'cast', 'spin', 'slash', 'slam'] as const) {
+      a.play(w, 'attack', { to: new Vector3(w.position.x + 1, 0, 0), duration: 1, motion, contact: 0.45 });
+      for (let t = 0; t < 1.2; t += 1 / 60) {
+        a.update(1 / 60);
+        root.updateMatrixWorld(true);
+        low = Math.min(low, new Box3().setFromObject(statue).min.y);
+      }
+    }
+    // The leans pivot on the feet, so only a sole's edge dips, a few hundredths at most (this stand-in
+    // has a flat 0.4-wide sole, wider than the statues'); the old 0.78-wide pedestal dipped more.
+    expect(low).toBeGreaterThan(-0.1);
   });
 
   it('attack flares the aura at impact and settles back; the procedural animator still moves the piece', () => {
