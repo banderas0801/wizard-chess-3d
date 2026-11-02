@@ -79,6 +79,36 @@ describe('statue (rigid Meshy rook)', () => {
     expect(statueOf(w).castShadow).toBe(true);
   });
 
+  it('the two sides face each other at rest, and turn to face their target mid-move or mid-strike', () => {
+    // Meshy statues face +z in model space; white stands at +z (rank 1), black at -z (rank 8).
+    const a = createStatueAnimator(createProceduralAnimator(), { type: 'rook', pedestal, pedestalTop: TOP });
+    a.kit = buildStatueKit(template());
+    const root = new Group();
+    const w = piece('rook', 'white');
+    const b = piece('rook', 'black');
+    w.position.set(0, 0, 3.5);
+    b.position.set(0, 0, -3.5);
+    root.add(w, b);
+    a.attachAll(root);
+    const facing = (o: Object3D): Vector3 => {
+      o.updateMatrixWorld(true);
+      return o.getObjectByName('statue')!.getWorldDirection(new Vector3()).setY(0).normalize();
+    };
+    expect(facing(w).z).toBeLessThan(-0.9); // white looks toward black (-z)
+    expect(facing(b).z).toBeGreaterThan(0.9); // black looks toward white (+z)
+    expect(facing(w).dot(facing(b))).toBeLessThan(-0.75);
+
+    // Black strikes down the board, white sideways: halfway through, each looks where it is going.
+    a.play(b, 'attack', { to: new Vector3(0, 0, -2.5), duration: 1, motion: 'slam', contact: 0.45 });
+    a.play(w, 'move', { to: new Vector3(2, 0, 3.5), duration: 1 });
+    run(a, 0.5, 0.01);
+    expect(facing(b).z).toBeGreaterThan(0.99);
+    expect(facing(w).x).toBeGreaterThan(0.99);
+    run(a, 1);
+    expect(facing(b).z).toBeGreaterThan(0.9); // back to its rest facing
+    expect(facing(w).z).toBeLessThan(-0.9);
+  });
+
   it('white keeps the baked texture with a gold aura; black is obsidian with a crimson one, per instance', () => {
     const { root } = setup();
     const [w, b] = root.children as [Object3D, Object3D];
