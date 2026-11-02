@@ -22,7 +22,7 @@ export interface FxCue {
 }
 
 /** Attack body motion, interpreted by the animator. */
-export type StrikeMotion = 'lunge' | 'ram' | 'cast' | 'spin' | 'slash';
+export type StrikeMotion = 'lunge' | 'ram' | 'cast' | 'spin' | 'slash' | 'slam';
 
 export interface StrikeProfile {
   readonly approach: {
@@ -47,7 +47,7 @@ export interface StrikeProfile {
 
 const glide = (secondsPerSquare: number, stopShort = 0.55) => ({ secondsPerSquare, hop: 0, stopShort });
 
-// Camera shake only for the rook's ram and the queen's blade storm (blueprint invariant 4).
+// Camera shake only for the rook's hammer slam and the queen's blade storm (blueprint invariant 4).
 export const STRIKE_PROFILES: Readonly<Record<PieceType, StrikeProfile>> = {
   pawn: {
     approach: glide(0.45), strike: 1.5, impactAt: 0.6, motion: 'lunge', contact: 0.34, pull: 0,
@@ -67,10 +67,11 @@ export const STRIKE_PROFILES: Readonly<Record<PieceType, StrikeProfile>> = {
       { kind: 'embers', at: 'impact', strength: 1 },
     ],
   },
+  // Armoured hammer knight: wind-up, leap (the take-off kicks dust), slam down on the victim.
   rook: {
-    approach: glide(0.16, 0.9), strike: 1.5, impactAt: 0.6, motion: 'ram', contact: 0.3, pull: 0,
+    approach: glide(0.2, 1.1), strike: 1.6, impactAt: 0.6, motion: 'slam', contact: 0.45, pull: 0,
     fx: [
-      { kind: 'dust', at: 'strike', strength: 0.6, delay: 0.45 },
+      { kind: 'dust', at: 'strike', strength: 0.5, delay: 0.46 },
       { kind: 'shockwave', at: 'impact', strength: 1 },
       { kind: 'debris', at: 'impact', strength: 1 },
       { kind: 'sparks', at: 'impact', strength: 0.7 },

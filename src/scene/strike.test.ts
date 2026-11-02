@@ -1,4 +1,4 @@
-// Blueprint invariant 4 (profile half): the 0.3 s camera shake belongs to the rook's ram and the
+// Blueprint invariant 4 (profile half): the 0.3 s camera shake belongs to the rook's hammer slam and the
 // queen's blade vortex only. The other half (never in Zen or at tier off) is in src/fx/budget.test.ts.
 import { describe, expect, it } from 'vitest';
 import type { PieceType } from '../game';
@@ -7,10 +7,11 @@ import { STRIKE_PROFILES } from './strike';
 const TYPES = Object.keys(STRIKE_PROFILES) as PieceType[];
 
 describe('strike profiles', () => {
-  it('only the rook ram and the queen vortex shake the camera', () => {
+  it('only the rook slam and the queen vortex shake the camera', () => {
     const shakers = TYPES.filter((t) => STRIKE_PROFILES[t].fx.some((c) => c.kind === 'shake'));
     expect(shakers.sort()).toEqual(['queen', 'rook']);
-    expect(STRIKE_PROFILES.rook.motion).toBe('ram');
+    expect(STRIKE_PROFILES.rook.motion).toBe('slam');
+    expect(STRIKE_PROFILES.rook.fx.map((c) => c.kind)).toEqual(expect.arrayContaining(['shockwave', 'debris']));
     expect(STRIKE_PROFILES.queen.fx.some((c) => c.kind === 'vortex')).toBe(true);
   });
 
