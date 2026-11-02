@@ -31,13 +31,13 @@ export interface StrikeProfile {
 const glide = (secondsPerSquare: number, stopShort = 0.55) => ({ secondsPerSquare, hop: 0, stopShort });
 
 export const STRIKE_PROFILES: Readonly<Record<PieceType, StrikeProfile>> = {
-  pawn: { approach: glide(0.3), strike: 0.45, impactAt: 0.6, fx: [{ kind: 'sparks', at: 'impact', strength: 0.4 }] },
+  pawn: { approach: glide(0.45), strike: 1.5, impactAt: 0.6, fx: [{ kind: 'sparks', at: 'impact', strength: 0.4 }] },
   knight: {
-    approach: { secondsPerSquare: 0.22, hop: 0.85, stopShort: 0.6 },
-    strike: 0.5, impactAt: 0.6, fx: [{ kind: 'sparks', at: 'impact', strength: 0.6 }, { kind: 'shake', at: 'impact', strength: 0.3 }],
+    approach: { secondsPerSquare: 0.32, hop: 0.85, stopShort: 0.6 },
+    strike: 1.5, impactAt: 0.6, fx: [{ kind: 'sparks', at: 'impact', strength: 0.6 }, { kind: 'shake', at: 'impact', strength: 0.3 }],
   },
-  bishop: { approach: glide(0.13, 1.4), strike: 0.65, impactAt: 0.7, fx: [{ kind: 'beam', at: 'strike', strength: 1 }] },
-  rook: { approach: glide(0.12), strike: 0.55, impactAt: 0.6, fx: [{ kind: 'shake', at: 'impact', strength: 1 }, { kind: 'sparks', at: 'impact', strength: 0.8 }] },
-  queen: { approach: glide(0.12, 0.8), strike: 0.6, impactAt: 0.6, fx: [{ kind: 'vortex', at: 'strike', strength: 1 }, { kind: 'shake', at: 'impact', strength: 0.5 }] },
-  king: { approach: glide(0.35), strike: 0.55, impactAt: 0.6, fx: [{ kind: 'sparks', at: 'impact', strength: 1 }, { kind: 'shake', at: 'impact', strength: 0.6 }] },
+  bishop: { approach: glide(0.18, 1.4), strike: 1.7, impactAt: 0.68, fx: [{ kind: 'beam', at: 'strike', strength: 1 }] },
+  rook: { approach: glide(0.16), strike: 1.5, impactAt: 0.6, fx: [{ kind: 'shake', at: 'impact', strength: 1 }, { kind: 'sparks', at: 'impact', strength: 0.8 }] },
+  queen: { approach: glide(0.16, 0.8), strike: 1.8, impactAt: 0.65, fx: [{ kind: 'vortex', at: 'strike', strength: 1 }, { kind: 'shake', at: 'impact', strength: 0.5 }] },
+  king: { approach: glide(0.5), strike: 1.5, impactAt: 0.6, fx: [{ kind: 'sparks', at: 'impact', strength: 1 }, { kind: 'shake', at: 'impact', strength: 0.6 }] },
 };

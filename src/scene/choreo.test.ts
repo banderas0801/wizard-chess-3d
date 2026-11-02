@@ -37,7 +37,7 @@ function harness(start: GameState, opts: { toggles?: { shake: boolean; closeUp: 
     },
     toggles: () => toggles,
     effect: (cue) => log.push(`fx ${cue.kind}`),
-    closeUp: () => log.push('closeUp'),
+    closeUp: (_sq, shot) => log.push(shot === 'mate' ? 'closeUp mate' : 'closeUp'),
     closeUpEnd: () => log.push('closeUpEnd'),
     onPhase: (p) => phases.push(p),
   });
@@ -116,10 +116,14 @@ describe('choreographer spec (4 cases)', () => {
     it('checkmate: settle -> kingFall -> idle', () => {
       const h = harness(fromFen(CAPTURE_FEN));
       h.play('f3f7');
-      h.clock(4);
+      h.clock(6);
       expect(h.phases).toEqual(['approach', 'strike', 'shatter', 'settle', 'kingFall', 'idle']);
       expect(h.log).toContain('fall fen-black-king-e8');
       expect(h.fens.length).toBe(2);
+      // The mate close-up frames the falling king and is held after idle (no closeUpEnd after it).
+      const mate = h.log.indexOf('closeUp mate');
+      expect(mate).toBeGreaterThan(h.log.indexOf('commit in settle'));
+      expect(h.log.slice(mate)).not.toContain('closeUpEnd');
     });
   });
 
@@ -245,10 +249,34 @@ describe('choreographer behaviour', () => {
   it('shake and close-up are skipped when toggled off (as at tier off)', () => {
     const h = harness(fromFen(CAPTURE_FEN), { toggles: { shake: false, closeUp: false } });
     h.play('f3f7');
-    h.clock(4);
+    h.clock(6);
     expect(h.log).not.toContain('fx shake');
     expect(h.log).not.toContain('closeUp');
     expect(h.log).toContain('fx vortex'); // particles stay, the fx layer scales them by tier
+  });
+
+  it.each(Object.keys(STRIKE_PROFILES) as (keyof typeof STRIKE_PROFILES)[])('pacing: a %s capture runs ~2.5-3 s end to end', (type) => {
+    for (const [from, to] of [['d4', 'd5'], ['d4', 'd7'], ['b1', 'c3']] as const) {
+      const choreo = createChoreographer<number>({
+        stage: { move() {}, attack() {}, shatter() {}, fall() {}, cancel() {}, release() {} },
+        commit() {},
+        toggles: () => ({ shake: true, closeUp: true }),
+        effect() {},
+        closeUp() {},
+        closeUpEnd() {},
+      });
+      choreo.begin({
+        mover: { id: 'a', from, to }, profile: STRIKE_PROFILES[type], capture: { id: 'v', square: to },
+        companions: [], promotion: null, mate: null, next: 1,
+      });
+      let t = 0;
+      while (choreo.phase !== 'idle' && t < 10) {
+        choreo.tick(DT);
+        t += DT;
+      }
+      expect(t, `${type} ${from}-${to}`).toBeGreaterThanOrEqual(2.4);
+      expect(t, `${type} ${from}-${to}`).toBeLessThanOrEqual(3.2);
+    }
   });
 
   it('choreo reads profiles only: no piece-type branches in choreo.ts', () => {
