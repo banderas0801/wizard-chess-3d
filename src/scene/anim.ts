@@ -272,7 +272,7 @@ export function createProceduralAnimator(opts: ProceduralOptions = {}): Procedur
     if (!parent) return;
     const meshes: Mesh[] = [];
     obj.traverse((o) => {
-      if ((o as Mesh).isMesh) meshes.push(o as Mesh);
+      if ((o as Mesh).isMesh && !o.userData.noDebris) meshes.push(o as Mesh); // e.g. a glow decal
     });
     if (meshes.length === 0) return;
     const height = (obj.userData.height as number | undefined) ?? 0.6;
