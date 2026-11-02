@@ -59,13 +59,15 @@ export const TARGET_HEIGHT: Readonly<Record<PieceType, number>> = {
  * on the square with no pedestal; scene/statue.ts scales each model to this at load, so a new Meshy
  * file lands at the right size. Each value is reachable inside MAX_FOOTPRINT at the statues' rest
  * facing (tests/heights.test.ts measures the shipped files). Order: king > queen > rook, knight, bishop > pawn.
+ * The rook statue (shield and hammer) is far wider than the rest, so it stands shorter than the bishop
+ * and knight to read no bigger than them; the king's width caps it near 1.74.
  */
 export const STATUE_HEIGHT: Readonly<Record<PieceType, number>> = {
   king: 1.74,
-  queen: 1.62,
-  rook: 1.46,
-  bishop: 1.46,
-  knight: 1.4,
+  queen: 1.7,
+  rook: 1.38,
+  bishop: 1.62,
+  knight: 1.58,
   pawn: 1.2,
 };
 
