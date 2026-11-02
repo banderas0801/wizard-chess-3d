@@ -33,7 +33,7 @@ function fakeDom(): HTMLElement {
   } as unknown as HTMLElement;
 }
 
-const stage: ChoreoStage = { move() {}, attack() {}, shatter() {}, fall() {}, cancel() {}, release() {} };
+const stage: ChoreoStage = { move() {}, attack() {}, pull() {}, shatter() {}, fall() {}, cancel() {}, release() {} };
 
 function setup() {
   const camera = new PerspectiveCamera(38, 4 / 3, 0.1, 120);

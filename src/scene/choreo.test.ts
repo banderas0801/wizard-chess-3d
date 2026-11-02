@@ -23,6 +23,7 @@ function harness(start: GameState, opts: { toggles?: { shake: boolean; closeUp: 
   const stage: ChoreoStage = opts.stage ?? {
     move: (p) => log.push(`move ${p.id} ${p.from}-${p.to}`),
     attack: (id) => log.push(`attack ${id}`),
+    pull: (id) => log.push(`pull ${id}`),
     shatter: (id) => log.push(`shatter ${id}`),
     fall: (id) => log.push(`fall ${id}`),
     cancel: () => log.push('stage.cancel'),
@@ -258,7 +259,7 @@ describe('choreographer behaviour', () => {
   it.each(Object.keys(STRIKE_PROFILES) as (keyof typeof STRIKE_PROFILES)[])('pacing: a %s capture runs ~2.5-3 s end to end', (type) => {
     for (const [from, to] of [['d4', 'd5'], ['d4', 'd7'], ['b1', 'c3']] as const) {
       const choreo = createChoreographer<number>({
-        stage: { move() {}, attack() {}, shatter() {}, fall() {}, cancel() {}, release() {} },
+        stage: { move() {}, attack() {}, pull() {}, shatter() {}, fall() {}, cancel() {}, release() {} },
         commit() {},
         toggles: () => ({ shake: true, closeUp: true }),
         effect() {},

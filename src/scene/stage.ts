@@ -27,9 +27,18 @@ export function createAnimatorStage({ animator, get, fx }: StageDeps): ChoreoSta
       if (o.stopShort > 0) to.addScaledVector(to.clone().sub(from).normalize(), -o.stopShort * SQUARE_SIZE);
       animator.play(obj, 'move', { to, duration: o.duration, hop: o.hop });
     },
-    attack(id, to, duration) {
+    attack(id, to, o) {
       const obj = get(id);
-      if (obj) animator.play(obj, 'attack', { to: world(to), duration });
+      if (obj) animator.play(obj, 'attack', { to: world(to), duration: o.duration, motion: o.motion, contact: o.contact * SQUARE_SIZE });
+    },
+    pull(victimId, attackerId, distance, duration) {
+      const victim = get(victimId);
+      const attacker = get(attackerId);
+      if (!victim || !attacker) return;
+      const to = victim.position.clone();
+      const dir = attacker.position.clone().sub(to).setY(0);
+      if (dir.lengthSq() < 1e-9) return;
+      animator.drag(victim, to.addScaledVector(dir.normalize(), distance * SQUARE_SIZE), duration);
     },
     shatter(id, duration) {
       const obj = get(id);

@@ -22,7 +22,7 @@
 // only moves meshes; begin() is refused unless idle, cancel() is always accepted. Special-move
 // data (capture square, castling rook, promotion) arrives in the plan from the engine.
 import type { Promotion, Square } from '../game';
-import type { FxCue, StrikeProfile } from './strike';
+import type { FxCue, StrikeMotion, StrikeProfile } from './strike';
 
 export type Phase = 'idle' | 'approach' | 'strike' | 'shatter' | 'settle' | 'kingFall' | 'cancelled';
 
@@ -50,7 +50,10 @@ export interface MovePlan<S> {
 /** Mesh-side operations. Implemented over a PieceAnimator in the app, by a fake in tests. */
 export interface ChoreoStage {
   move(p: PieceMove, opts: { readonly duration: number; readonly hop: number; readonly stopShort: number }): void;
-  attack(id: string, to: Square, duration: number): void;
+  /** Attack clip toward the victim on `to`; motion and contact come straight from the profile. */
+  attack(id: string, to: Square, opts: { readonly duration: number; readonly motion: StrikeMotion; readonly contact: number }): void;
+  /** Draw the victim `distance` squares toward the attacker's live position over `duration`. */
+  pull(victimId: string, attackerId: string, distance: number, duration: number): void;
   shatter(id: string, duration: number): void;
   fall(id: string, duration: number): void;
   /** Abort and restore every touched mesh to its start pose. */
@@ -65,8 +68,11 @@ export interface ChoreoHost<S> {
   commit(next: S): void;
   /** Visual toggles, re-read each time they matter (both false at quality tier off). */
   toggles(): { readonly shake: boolean; readonly closeUp: boolean };
-  /** Fire a profile fx cue; `moverId` lets the app start it at the attacker's live position. */
-  effect(cue: FxCue, moverId: string, at: Square): void;
+  /**
+   * Fire a profile fx cue; `moverId` lets the app start it at the attacker's live position.
+   * `impactIn` is the seconds until the blow lands (0 for impact cues), so charge-ups can time out.
+   */
+  effect(cue: FxCue, moverId: string, at: Square, impactIn: number): void;
   /** 'capture' follows the strike and ends with the move; 'mate' frames the falling king and is kept. */
   closeUp(at: Square, shot?: 'capture' | 'mate'): void;
   closeUpEnd(): void;
@@ -122,12 +128,12 @@ export function createChoreographer<S>(host: ChoreoHost<S>): Choreographer<S> {
     host.onPhase?.(next, prev);
   };
 
-  const cues = (at: 'strike' | 'impact'): void => {
+  const cues = (at: 'strike' | 'impact', impactIn = 0): void => {
     if (!plan) return;
     for (const cue of plan.profile.fx) {
       if (cue.at !== at) continue;
       if (cue.kind === 'shake' && !host.toggles().shake) continue;
-      host.effect(cue, plan.mover.id, plan.capture?.square ?? plan.mover.to);
+      host.effect(cue, plan.mover.id, plan.capture?.square ?? plan.mover.to, impactIn);
     }
   };
 
@@ -150,8 +156,9 @@ export function createChoreographer<S>(host: ChoreoHost<S>): Choreographer<S> {
       case 'approach':
         if (!p.capture) return enterSettle();
         go('strike', prof.strike * prof.impactAt);
-        host.stage.attack(p.mover.id, p.mover.to, prof.strike);
-        cues('strike');
+        host.stage.attack(p.mover.id, p.mover.to, { duration: prof.strike, motion: prof.motion, contact: prof.contact });
+        if (prof.pull > 0) host.stage.pull(p.capture.id, p.mover.id, prof.pull, prof.strike * prof.impactAt);
+        cues('strike', prof.strike * prof.impactAt);
         return;
       case 'strike':
         go('shatter', Math.max(TIMING.shatter, prof.strike * (1 - prof.impactAt)));
