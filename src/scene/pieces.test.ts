@@ -1,6 +1,6 @@
 import { it, expect } from 'vitest';
 import { Box3, type Object3D } from 'three';
-import { createPieces, ROOK_WHEEL_RADIUS } from './pieces';
+import { createPieces } from './pieces';
 it('sync rebuilds a piece mesh when its type changes (promotion)', () => {
   const p = createPieces();
   const pawn = { id: 'x', type: 'pawn', color: 'black' } as const;
@@ -21,8 +21,8 @@ it('the rook is a chariot: two wheels on the ground either side, ram facing the 
     const wheels = rook.userData.wheels as Object3D[];
     expect(wheels.length).toBe(2);
     expect(wheels[0]!.position.z * wheels[1]!.position.z).toBeLessThan(0);
-    expect(rook.userData.wheelRadius).toBe(ROOK_WHEEL_RADIUS);
     const b = new Box3().setFromObject(wheels[0]!);
+    expect((b.max.y - b.min.y) / 2).toBeCloseTo(rook.userData.wheelRadius as number, 2); // rolls without slipping
     expect(b.min.y - rook.position.y).toBeCloseTo(0, 2); // rolls on the board
   }
   expect(p.group.getObjectByName('wr')!.rotation.y).toBeCloseTo(Math.PI / 2);
