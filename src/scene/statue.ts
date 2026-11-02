@@ -15,17 +15,20 @@ import {
   MeshBasicMaterial,
   MeshStandardMaterial,
   RingGeometry,
+  Vector3,
   type Material,
   type Object3D,
 } from 'three';
 import type { Color, PieceType } from '../game';
-import { MAX_FOOTPRINT, TARGET_HEIGHT } from './assets';
+import { MAX_FOOTPRINT, STATUE_HEIGHT } from './assets';
 import { ATTACK_IMPACT, headingYaw, type Clip, type ClipParams, type PieceAnimator } from './anim';
 
 export interface StatueKit {
   readonly template: Object3D;
   /** Model-space bounds of the template (meshes only). */
   readonly bounds: Box3;
+  /** Model-space x/z of (a sample of) the vertices, flattened [x0, z0, x1, z1, …]: the footprint. */
+  readonly footprint: Float32Array;
 }
 
 export async function loadStatueKit(url: string): Promise<StatueKit> {
@@ -47,8 +50,23 @@ export function buildStatueKit(scene: Object3D): StatueKit {
     if ((o as Mesh).isMesh) bounds.expandByObject(o, true);
   });
   if (bounds.isEmpty()) throw new Error('statue has no mesh');
-  return { template: scene, bounds };
+  const xz: number[] = [];
+  const v = new Vector3();
+  scene.traverse((o) => {
+    const m = o as Mesh;
+    const pos = m.isMesh ? m.geometry.getAttribute('position') : undefined;
+    if (!pos) return;
+    const step = Math.max(1, Math.floor(pos.count / FOOTPRINT_SAMPLES));
+    for (let i = 0; i < pos.count; i += step) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+      xz.push(v.x, v.z);
+    }
+  });
+  return { template: scene, bounds, footprint: Float32Array.from(xz) };
 }
+
+/** Vertices sampled per mesh for the footprint (plenty for a 35k-triangle statue's silhouette). */
+const FOOTPRINT_SAMPLES = 8000;
 
 /**
  * Per-side finish of the baked texture. White keeps it, with a faint gold aura through the map.
@@ -116,26 +134,44 @@ export function finishMaterial(src: Material, color: Color): MeshStandardMateria
 
 export interface StatueOptions {
   readonly type: PieceType;
-  /** The turned pedestal the figure stands on (same foot and gold rim as the other pieces). */
-  readonly pedestal: (color: Color) => Object3D;
-  /** Height of the pedestal's top face, where the figure's feet go. */
-  readonly pedestalTop: number;
   /** Aura colours (defaults from STATUE_FINISH). */
   readonly glow?: Partial<Record<Color, string>>;
 }
 
+/** The model faces +z; the animator's piece forward is +x, so the mount turns it a quarter. */
+const MOUNT_YAW = Math.PI / 2;
+/** Facing the opponent, turned a little so the weapon side reads from the player's seat. */
+const REST_TURN = 0.35;
+const REST_YAW: Readonly<Record<Color, number>> = { white: headingYaw(0, -1) + REST_TURN, black: headingYaw(0, 1) + REST_TURN };
+/** The model's yaw on the board at rest: the same for both sides up to a half turn, so one fit serves both. */
+export const STATUE_REST_YAW = REST_YAW.white + MOUNT_YAW;
+
 /**
- * Uniform scale and offset that stand a model of these bounds on the pedestal: the whole piece is
- * TARGET_HEIGHT[type] tall, unless its footprint (the circle around its x/z extent, so it holds at
- * any yaw) would spread wider than MAX_FOOTPRINT of the square, in which case it shrinks to fit.
+ * Uniform scale and offset that stand a model straight on the square, no pedestal: feet on the board
+ * (y = 0), STATUE_HEIGHT[type] tall, and centred on the square at its rest facing. If the footprint
+ * at that facing would spread wider or deeper than MAX_FOOTPRINT of the square, it shrinks to fit,
+ * so neighbours one square apart never meet. The offset is in the model's own (unturned) frame.
  */
-export function fitStatue(b: Box3, type: PieceType, pedestalTop: number): { scale: number; offset: [number, number, number] } {
-  const figure = Math.max(1e-6, TARGET_HEIGHT[type] - pedestalTop);
-  const byHeight = figure / Math.max(1e-6, b.max.y - b.min.y);
-  const span = 2 * Math.hypot((b.max.x - b.min.x) / 2, (b.max.z - b.min.z) / 2);
-  const byWidth = MAX_FOOTPRINT / Math.max(1e-6, span);
+export function fitStatue(kit: Pick<StatueKit, 'bounds' | 'footprint'>, type: PieceType, yaw = STATUE_REST_YAW): { scale: number; offset: [number, number, number] } {
+  const b = kit.bounds;
+  const c = Math.cos(yaw);
+  const sn = Math.sin(yaw);
+  // three's yaw maps (x, z) to (x cos + z sin, -x sin + z cos).
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  const f = kit.footprint;
+  for (let i = 0; i + 1 < f.length; i += 2) {
+    const X = f[i]! * c + f[i + 1]! * sn;
+    const Z = -f[i]! * sn + f[i + 1]! * c;
+    x0 = Math.min(x0, X); x1 = Math.max(x1, X); z0 = Math.min(z0, Z); z1 = Math.max(z1, Z);
+  }
+  if (!(x1 >= x0)) [x0, x1, z0, z1] = [b.min.x, b.max.x, b.min.z, b.max.z]; // no samples: the bounds
+  const byHeight = STATUE_HEIGHT[type] / Math.max(1e-6, b.max.y - b.min.y);
+  const byWidth = MAX_FOOTPRINT / Math.max(1e-6, x1 - x0, z1 - z0);
   const s = Math.min(byHeight, byWidth);
-  return { scale: s, offset: [-((b.min.x + b.max.x) / 2) * s, pedestalTop - b.min.y * s, -((b.min.z + b.max.z) / 2) * s] };
+  // Centre of the turned footprint, turned back into the model frame.
+  const cx = (x0 + x1) / 2;
+  const cz = (z0 + z1) / 2;
+  return { scale: s, offset: [-(cx * c - cz * sn) * s, -b.min.y * s, -(cx * sn + cz * c) * s] };
 }
 
 interface Rig {
@@ -172,14 +208,13 @@ export function createStatueAnimator(
 ): StatueAnimator {
   const rigs = new Map<Object3D, Rig>();
   let kit: StatueKit | null = null;
-  // Facing the opponent, turned a little so the hammer side reads from the player's seat.
-  const restYaw: Record<Color, number> = { white: headingYaw(0, -1) + 0.35, black: headingYaw(0, 1) + 0.35 };
+  const restYaw = REST_YAW;
   const glowOf = (c: Color): string => opts.glow?.[c] ?? STATUE_FINISH[c].glow;
 
   const attach = (obj: Object3D): void => {
     if (!kit || rigs.has(obj) || obj.userData.type !== opts.type) return;
     const color = obj.userData.color as Color;
-    const fit = fitStatue(kit.bounds, opts.type, opts.pedestalTop);
+    const fit = fitStatue(kit, opts.type);
     const statue = kit.template.clone(true); // geometry + textures shared; materials replaced per instance
     statue.name = 'statue';
     statue.scale.setScalar(fit.scale);
@@ -200,10 +235,8 @@ export function createStatueAnimator(
     });
     const mount = new Group();
     mount.name = 'mount';
-    mount.rotation.y = Math.PI / 2; // the model faces +z; the animator's piece forward is +x
+    mount.rotation.y = MOUNT_YAW;
     mount.add(statue);
-    const pedestal = opts.pedestal(color);
-    pedestal.name = 'pedestal';
 
     const ring = new Mesh(
       new RingGeometry(0.26, 0.34, 48),
@@ -218,10 +251,10 @@ export function createStatueAnimator(
     ring.userData.noDebris = true; // shatter shards take the statue's stone, not the additive glow
 
     for (const c of obj.children) c.visible = false; // procedural piece hidden; the statue replaces it
-    obj.add(pedestal, mount, ring);
+    obj.add(mount, ring);
     obj.userData.restYaw = restYaw[color];
     obj.userData.wheels = []; // no chariot any more: nothing to roll
-    obj.userData.height = opts.pedestalTop + (kit.bounds.max.y - kit.bounds.min.y) * fit.scale;
+    obj.userData.height = (kit.bounds.max.y - kit.bounds.min.y) * fit.scale;
     obj.rotation.set(0, restYaw[color], 0);
     const rig: Rig = { glow: new ThreeColor(glowOf(color)), mats, ring, rest: STATUE_FINISH[color].glowIntensity, t: 0, dur: 0 };
     setGlow(rig, 0);
