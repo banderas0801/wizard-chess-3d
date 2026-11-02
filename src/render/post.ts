@@ -16,7 +16,7 @@ export interface Post {
 }
 
 // Threshold is in linear HDR (pre tone-mapping) units: only speculars and hot highlights bloom.
-const BLOOM = { strength: 0.2, radius: 0.3, threshold: 4 } as const;
+const BLOOM = { strength: 0.55, radius: 0.45, threshold: 4 } as const;
 
 /**
  * Tiers: off = plain renderer.render (no composer at all);
