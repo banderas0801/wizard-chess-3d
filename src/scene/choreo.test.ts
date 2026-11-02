@@ -5,7 +5,7 @@ import { Quaternion, Vector3 } from 'three';
 import { fromFen, initialState, parseUci, toFen, type GameState, type PieceType } from '../game';
 import { createProceduralAnimator } from './anim';
 import { squareToWorld } from './board';
-import { createChoreographer, type ChoreoStage, type Phase } from './choreo';
+import { animDt, createChoreographer, MAX_ANIM_DT, type ChoreoStage, type Phase } from './choreo';
 import { createPieces } from './pieces';
 import { planMove } from './plan';
 import { createAnimatorStage } from './stage';
@@ -381,5 +381,37 @@ describe('capture motion is continuous (no snap, no dead hold)', () => {
     expect(attackDur).toBeCloseTo(prof.strike, 6);
     expect(durations.shatter!).toBeCloseTo(prof.strike * (1 - prof.impactAt), 2);
     expect(durations.strike! + durations.shatter!).toBeCloseTo(prof.strike, 2);
+  });
+});
+
+describe('animation dt clamp', () => {
+  it('passes normal frames through and caps hitches at 1/30 s', () => {
+    expect(MAX_ANIM_DT).toBeCloseTo(1 / 30, 12);
+    expect(animDt(1 / 60)).toBe(1 / 60);
+    expect(animDt(1 / 30)).toBe(1 / 30);
+    expect(animDt(0.5)).toBe(1 / 30);
+    expect(animDt(-1)).toBe(0);
+  });
+
+  it('a 500 ms hitch mid-attack moves the attacker no further than one 1/30 s step', () => {
+    const run = (hitch: number): number => {
+      const r = real(CAPTURE_FEN);
+      r.h.play('c4f7');
+      r.h.until('strike');
+      const at = r.pos(r.attacker).clone();
+      const dt = animDt(hitch);
+      r.h.choreo.tick(dt);
+      r.animator.update(dt);
+      return r.pos(r.attacker).distanceTo(at);
+    };
+    expect(run(0.5)).toBeCloseTo(run(1 / 30), 9);
+    expect(run(0.5)).toBeLessThan(0.15);
+  });
+
+  it('main feeds clamped dt to choreo/animator/fx and real dt to the camera', () => {
+    const src = readFileSync(join(import.meta.dirname, '..', 'main.ts'), 'utf8');
+    expect(src).toMatch(/const step = animDt\(dt\)/);
+    expect(src).toMatch(/const adt = step \* timeScale \* slow/);
+    for (const call of ['choreo.tick(adt)', 'animator.update(adt)', 'fx.update(adt)', 'rig.update(dt)']) expect(src).toContain(call);
   });
 });
