@@ -32,3 +32,8 @@ Runtime npm packages and their licences (allowed: MIT, BSD, Apache-2.0, zlib).
 | `camera-controls` | ^3.1.2 | orbit camera rig | MIT | https://github.com/yomotsu/camera-controls |
 | `three.quarks` | ^0.17.1 | strike particle systems (`src/fx/strike-fx.ts`) | MIT (Copyright (c) 2019 Forrest Sun) | https://github.com/Alchemist0823/three.quarks |
 | `quarks.core` | 0.17.1 (dependency of three.quarks) | particle simulation core | MIT | https://github.com/Alchemist0823/three.quarks |
+
+Dev-only packages used by the asset budget test (`tests/assets.test.ts`), not shipped:
+`@gltf-transform/core` and `@gltf-transform/extensions` (MIT, https://github.com/donmccurdy/glTF-Transform),
+`meshoptimizer` (MIT, https://github.com/zeux/meshoptimizer; the runtime decoder comes from three's own
+`three/examples/jsm/libs/meshopt_decoder.module.js`, MIT).
