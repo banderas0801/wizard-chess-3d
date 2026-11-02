@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { Box3, BoxGeometry, Group, Mesh, MeshBasicMaterial, MeshStandardMaterial, Texture, Vector3, type Object3D } from 'three';
 import { ATTACK_IMPACT, createProceduralAnimator } from './anim';
-import { buildStatueKit, createStatueAnimator, finishMaterial, glowPulse, STATUE_FINISH, type StatueKit } from './statue';
+import { MAX_FOOTPRINT, TARGET_HEIGHT } from './assets';
+import { buildStatueKit, createStatueAnimator, finishMaterial, fitStatue, glowPulse, obsidianShader, STATUE_FINISH, type StatueKit } from './statue';
 
-const HEIGHT = 0.95;
+const HEIGHT = TARGET_HEIGHT.rook;
+const TOP = 0.2;
+/** Stand-in pedestal: a 0.2-tall disc, tagged with its side. */
+const pedestal = (c: 'white' | 'black'): Object3D => {
+  const g = new Group();
+  g.userData.side = c;
+  g.add(new Mesh(new BoxGeometry(0.5, TOP, 0.5).translate(0, TOP / 2, 0), new MeshBasicMaterial()));
+  return g;
+};
 
 /** Stand-in for the Meshy rook: 1.9 tall, centred on the origin, off-centre in x/z like a shield arm. */
 const template = (): Object3D => {
@@ -29,7 +38,7 @@ const piece = (type: string, color: 'white' | 'black', x = 0): Object3D => {
 
 const setup = (): { kit: StatueKit; root: Group; a: ReturnType<typeof createStatueAnimator> } => {
   const kit = buildStatueKit(template());
-  const a = createStatueAnimator(createProceduralAnimator(), { type: 'rook', height: HEIGHT });
+  const a = createStatueAnimator(createProceduralAnimator(), { type: 'rook', pedestal, pedestalTop: TOP });
   a.kit = kit;
   const root = new Group();
   root.add(piece('rook', 'white'), piece('rook', 'black', 2), piece('pawn', 'white', 4));
@@ -48,7 +57,7 @@ describe('statue (rigid Meshy rook)', () => {
     expect(() => buildStatueKit(new Group())).toThrow();
   });
 
-  it('replaces only rooks, idempotently, standing on the board at the requested height and centred', () => {
+  it('replaces only rooks, idempotently, standing on its pedestal at the table height and centred', () => {
     const { root, a } = setup();
     a.attachAll(root);
     expect(a.count).toBe(2);
@@ -58,9 +67,13 @@ describe('statue (rigid Meshy rook)', () => {
     expect(w.getObjectByName('aura')).toBeDefined();
     expect(w.userData.wheels).toEqual([]);
     w.updateMatrixWorld(true);
+    const ped = w.getObjectByName('pedestal')!;
+    expect(ped.userData.side).toBe('white');
+    expect((root.children[1] as Object3D).getObjectByName('pedestal')!.userData.side).toBe('black');
     const box = new Box3().setFromObject(w.getObjectByName('statue')!);
-    expect(box.min.y).toBeCloseTo(0, 6);
+    expect(box.min.y).toBeCloseTo(TOP, 6); // feet on the pedestal top
     expect(box.max.y).toBeCloseTo(HEIGHT, 6);
+    expect(w.userData.height).toBeCloseTo(HEIGHT, 6);
     const c = box.getCenter(new Vector3());
     expect(Math.hypot(c.x - w.position.x, c.z - w.position.z)).toBeLessThan(1e-6);
     expect(statueOf(w).castShadow).toBe(true);
@@ -78,8 +91,36 @@ describe('statue (rigid Meshy rook)', () => {
     expect(`#${bm.emissive.getHexString()}`).toBe('#dc2626');
     expect(bm.color.r).toBeLessThan(0.1); // near-black albedo multiplier
     expect(bm.roughness).toBeLessThan(wm.roughness);
-    expect(bm.emissiveMap).toBe(bm.map);
+    expect(wm.emissiveMap).toBe(wm.map);
     expect(finishMaterial(new MeshBasicMaterial(), 'white').map).toBeNull();
+  });
+
+  it('black glow ignores the baked colours: no emissive map, greyed albedo, crimson rim', () => {
+    // The bug: emissiveMap = albedo map multiplied crimson by the red cloak, so black statues glowed red.
+    const bm = finishMaterial(new MeshStandardMaterial({ map: new Texture() }), 'black');
+    expect(bm.emissiveMap).toBeNull();
+    expect(bm.map).not.toBeNull(); // carving detail kept, as luminance
+    expect(bm.customProgramCacheKey()).toBe('statue-obsidian');
+    const shader = { fragmentShader: 'a\n#include <map_fragment>\nb\n#include <emissivemap_fragment>\nc' };
+    bm.onBeforeCompile(shader as never, null as never);
+    expect(shader.fragmentShader).toMatch(/dot\( sampledDiffuseColor\.rgb, vec3\(0\.2126/);
+    expect(shader.fragmentShader).toMatch(/totalEmissiveRadiance \*=.*vViewPosition/);
+    const fs = { fragmentShader: '#include <map_fragment>' };
+    obsidianShader(fs);
+    expect(fs.fragmentShader.startsWith('#include <map_fragment>')).toBe(true);
+    const wm = finishMaterial(new MeshStandardMaterial({ map: new Texture() }), 'white');
+    expect(wm.userData.obsidian).toBeUndefined();
+  });
+
+  it('fits by height, or shrinks so the footprint stays inside the square', () => {
+    const tall = new Box3(new Vector3(-0.5, 0, -0.5), new Vector3(0.5, 2, 0.5));
+    const t = fitStatue(tall, 'pawn', TOP);
+    expect(t.scale).toBeCloseTo((TARGET_HEIGHT.pawn - TOP) / 2, 6);
+    expect(t.offset[1]).toBeCloseTo(TOP, 6); // min.y = 0: feet land on the top
+    const wide = new Box3(new Vector3(-2, 0, -1), new Vector3(2, 1, 1));
+    const w = fitStatue(wide, 'rook', TOP);
+    expect(2 * Math.hypot(2, 1) * w.scale).toBeCloseTo(MAX_FOOTPRINT, 6);
+    expect(w.scale).toBeLessThan((TARGET_HEIGHT.rook - TOP) / 1);
   });
 
   it('attack flares the aura at impact and settles back; the procedural animator still moves the piece', () => {
