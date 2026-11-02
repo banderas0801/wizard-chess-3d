@@ -12,7 +12,7 @@ CameraControls.install({ THREE: { Box3, Matrix4, Quaternion, Raycaster, Sphere, 
 export type Preset = 'player' | 'overhead' | 'side' | 'overview';
 type V3 = readonly [number, number, number];
 export const PRESETS: Readonly<Record<Preset, { readonly pos: V3; readonly target: V3 }>> = {
-  player: { pos: [0, 8.6, 11.0], target: [0, -0.2, 0.4] },
+  player: { pos: [0, 7.6, 10.0], target: [0, -0.2, 0.7] },
   overhead: { pos: [0, 14, 2.2], target: [0, 0, 0.1] },
   side: { pos: [12.5, 5.8, 0], target: [0, -0.2, 0] },
   overview: { pos: [6.4, 8.2, 9.4], target: [0, -0.2, 0] },
