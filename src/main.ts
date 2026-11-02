@@ -16,8 +16,8 @@ import { createAnimatorStage } from './scene/stage';
 import { createBoard, squareToWorld } from './scene/board';
 import { createHall, hallColliders } from './scene/hall';
 import { detailForTier, getMaterials } from './scene/materials';
-import { createPieces } from './scene/pieces';
-import { fromFen, initialState, legalMoves, outcome, parseUci, toFen, type GameState, type Move, type Square } from './game';
+import { buildPawnPedestal, createPieces, PAWN_PEDESTAL_TOP } from './scene/pieces';
+import { fromFen, initialState, legalMoves, outcome, parseUci, toFen, type Color as PieceColor, type GameState, type Move, type Square } from './game';
 import { createAiController } from './ai/controller';
 import { createWorkerPort } from './ai/workerPort';
 
@@ -101,12 +101,19 @@ async function main(): Promise<void> {
     accent: () => getMaterials(detail).gold,
     eye: () => getMaterials(detail).ebony,
   });
+  // Sculpted statues stand on the pawn's turned pedestal (ivory/ebony + gold rim), sized by
+  // TARGET_HEIGHT in scene/assets; `foot` widens it to the piece's own procedural foot.
+  const pedestal = (foot: number) => (c: PieceColor) => {
+    const p = buildPawnPedestal(c, detail);
+    p.scale.set(foot, 1, foot);
+    return p;
+  };
   // Pawns become the user's Meshy spearman (public/models/pieces/pawn_white.glb), a rigid statue on the
   // same layer as the rooks: white gold aura, black obsidian + crimson. The pawn strike profile is unchanged.
-  const pawns = createStatueAnimator(knights, { type: 'pawn', height: 0.6 });
+  const pawns = createStatueAnimator(knights, { type: 'pawn', pedestal: pedestal(1), pedestalTop: PAWN_PEDESTAL_TOP });
   // Rooks become the user's Meshy hammer knight (public/models/pieces), a rigid statue: the whole
   // figure tilts, leaps and squashes (the 'slam' strike); white gold aura, black obsidian + crimson.
-  const animator = createStatueAnimator(pawns, { type: 'rook', height: 0.95 });
+  const animator = createStatueAnimator(pawns, { type: 'rook', pedestal: pedestal(1.15), pedestalTop: PAWN_PEDESTAL_TOP });
   animator.idleSway = startTier !== 'off';
   const fx = createStrikeFx();
   scene.add(fx.group);
