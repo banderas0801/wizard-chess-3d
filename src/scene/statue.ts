@@ -19,6 +19,7 @@ import {
   type Object3D,
 } from 'three';
 import type { Color, PieceType } from '../game';
+import { MAX_FOOTPRINT, TARGET_HEIGHT } from './assets';
 import { ATTACK_IMPACT, headingYaw, type Clip, type ClipParams, type PieceAnimator } from './anim';
 
 export interface StatueKit {
@@ -49,23 +50,45 @@ export function buildStatueKit(scene: Object3D): StatueKit {
   return { template: scene, bounds };
 }
 
-/** Per-side finish of the baked texture: white keeps it, black turns obsidian. Both get a faint aura tint. */
+/**
+ * Per-side finish of the baked texture. White keeps it, with a faint gold aura through the map.
+ * Black is obsidian: the albedo is taken to grey (luminance only, so the red cloak can't show
+ * through) and tinted near-black, and the crimson glow is a rim light, not the map: an emissive map
+ * would multiply the crimson by the texture's own colours and make the red parts glow red.
+ */
 export interface StatueFinish {
-  /** Multiplies the baked albedo. */
+  /** Multiplies the (white) or the greyed (black) baked albedo. */
   readonly tint: string;
   /** Added to roughness from the baked map (negative = glossier), clamped by the shader. */
   readonly roughness: number;
   readonly metalness: number;
-  /** Aura colour (emissive, modulated by the albedo map) and its intensity at rest. */
+  /** Aura colour and its intensity at rest. */
   readonly glow: string;
   readonly glowIntensity: number;
+  /** Obsidian: grey albedo + fresnel rim glow instead of the baked colours. */
+  readonly obsidian: boolean;
 }
 
 export const STATUE_FINISH: Readonly<Record<Color, StatueFinish>> = {
-  white: { tint: '#ffffff', roughness: 1, metalness: 1, glow: '#F59E0B', glowIntensity: 0.06 },
-  // Obsidian: albedo pushed to near-black, glossier, with the crimson aura bleeding through the map.
-  black: { tint: '#2a2730', roughness: 0.55, metalness: 0.6, glow: '#DC2626', glowIntensity: 0.22 },
+  white: { tint: '#ffffff', roughness: 1, metalness: 1, glow: '#F59E0B', glowIntensity: 0.06, obsidian: false },
+  black: { tint: '#3a3742', roughness: 0.45, metalness: 0.35, glow: '#DC2626', glowIntensity: 0.4, obsidian: true },
 };
+
+/** Rec. 709 luminance weights: the obsidian keeps the carving's light and dark, none of its hue. */
+const LUMA = 'vec3(0.2126, 0.7152, 0.0722)';
+/** Rim glow: emissive weighted by (1 - N.V)^RIM_POWER, plus a small floor so the core isn't dead black. */
+const RIM_POWER = '3.0';
+const RIM_FLOOR = '0.0';
+
+/** Shader patch for the obsidian finish (exported so tests can check it without a GL context). */
+export function obsidianShader(shader: { fragmentShader: string }): void {
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <map_fragment>', `#include <map_fragment>\n#ifdef USE_MAP\n\tdiffuseColor.rgb = vec3( dot( sampledDiffuseColor.rgb, ${LUMA} ) ) * diffuse;\n#endif`)
+    .replace(
+      '#include <emissivemap_fragment>',
+      `#include <emissivemap_fragment>\n\ttotalEmissiveRadiance *= ${RIM_FLOOR} + pow( 1.0 - saturate( dot( normal, normalize( vViewPosition ) ) ), ${RIM_POWER} );`,
+    );
+}
 
 export function finishMaterial(src: Material, color: Color): MeshStandardMaterial {
   const f = STATUE_FINISH[color];
@@ -79,19 +102,40 @@ export function finishMaterial(src: Material, color: Color): MeshStandardMateria
     roughness: f.roughness,
     metalness: f.metalness,
     emissive: new ThreeColor(f.glow),
-    emissiveMap: base.map ?? null,
+    emissiveMap: f.obsidian ? null : (base.map ?? null),
     emissiveIntensity: f.glowIntensity,
   });
+  if (f.obsidian) {
+    m.onBeforeCompile = obsidianShader;
+    m.customProgramCacheKey = () => 'statue-obsidian';
+    m.userData.obsidian = true;
+  }
   m.name = `statue-${color}`;
   return m;
 }
 
 export interface StatueOptions {
   readonly type: PieceType;
-  /** Statue height on the board, base to crown. */
-  readonly height: number;
+  /** The turned pedestal the figure stands on (same foot and gold rim as the other pieces). */
+  readonly pedestal: (color: Color) => Object3D;
+  /** Height of the pedestal's top face, where the figure's feet go. */
+  readonly pedestalTop: number;
   /** Aura colours (defaults from STATUE_FINISH). */
   readonly glow?: Partial<Record<Color, string>>;
+}
+
+/**
+ * Uniform scale and offset that stand a model of these bounds on the pedestal: the whole piece is
+ * TARGET_HEIGHT[type] tall, unless its footprint (the circle around its x/z extent, so it holds at
+ * any yaw) would spread wider than MAX_FOOTPRINT of the square, in which case it shrinks to fit.
+ */
+export function fitStatue(b: Box3, type: PieceType, pedestalTop: number): { scale: number; offset: [number, number, number] } {
+  const figure = Math.max(1e-6, TARGET_HEIGHT[type] - pedestalTop);
+  const byHeight = figure / Math.max(1e-6, b.max.y - b.min.y);
+  const span = 2 * Math.hypot((b.max.x - b.min.x) / 2, (b.max.z - b.min.z) / 2);
+  const byWidth = MAX_FOOTPRINT / Math.max(1e-6, span);
+  const s = Math.min(byHeight, byWidth);
+  return { scale: s, offset: [-((b.min.x + b.max.x) / 2) * s, pedestalTop - b.min.y * s, -((b.min.z + b.max.z) / 2) * s] };
 }
 
 interface Rig {
@@ -135,12 +179,11 @@ export function createStatueAnimator(
   const attach = (obj: Object3D): void => {
     if (!kit || rigs.has(obj) || obj.userData.type !== opts.type) return;
     const color = obj.userData.color as Color;
-    const b = kit.bounds;
-    const s = opts.height / Math.max(1e-6, b.max.y - b.min.y);
+    const fit = fitStatue(kit.bounds, opts.type, opts.pedestalTop);
     const statue = kit.template.clone(true); // geometry + textures shared; materials replaced per instance
     statue.name = 'statue';
-    statue.scale.setScalar(s);
-    statue.position.set(-((b.min.x + b.max.x) / 2) * s, -b.min.y * s, -((b.min.z + b.max.z) / 2) * s);
+    statue.scale.setScalar(fit.scale);
+    statue.position.set(...fit.offset);
     const mats: MeshStandardMaterial[] = [];
     statue.traverse((o) => {
       const m = o as Mesh;
@@ -159,6 +202,8 @@ export function createStatueAnimator(
     mount.name = 'mount';
     mount.rotation.y = Math.PI / 2; // the model faces +z; the animator's piece forward is +x
     mount.add(statue);
+    const pedestal = opts.pedestal(color);
+    pedestal.name = 'pedestal';
 
     const ring = new Mesh(
       new RingGeometry(0.26, 0.34, 48),
@@ -173,10 +218,10 @@ export function createStatueAnimator(
     ring.userData.noDebris = true; // shatter shards take the statue's stone, not the additive glow
 
     for (const c of obj.children) c.visible = false; // procedural piece hidden; the statue replaces it
-    obj.add(mount, ring);
+    obj.add(pedestal, mount, ring);
     obj.userData.restYaw = restYaw[color];
     obj.userData.wheels = []; // no chariot any more: nothing to roll
-    obj.userData.height = opts.height;
+    obj.userData.height = opts.pedestalTop + (kit.bounds.max.y - kit.bounds.min.y) * fit.scale;
     obj.rotation.set(0, restYaw[color], 0);
     const rig: Rig = { glow: new ThreeColor(glowOf(color)), mats, ring, rest: STATUE_FINISH[color].glowIntensity, t: 0, dur: 0 };
     setGlow(rig, 0);
