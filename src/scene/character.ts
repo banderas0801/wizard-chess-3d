@@ -25,6 +25,7 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 import type { Color, PieceType } from '../game';
 import { headingYaw, type Clip, type ClipParams, type PieceAnimator, type ProceduralAnimator } from './anim';
 import { createRider, LANCE_COUCHED, LANCE_REST, SADDLE } from './rider';
+import { TURNED_SCALE } from './pieces';
 
 /** Skeleton clip per animator verb (names from the glTF). */
 export const CHARACTER_CLIPS = {
@@ -87,8 +88,8 @@ export interface CharacterMaterials {
 
 /** Length of the horse nose-to-tail on the board, in squares. */
 const HORSE_LENGTH = 0.8;
-/** Top of the knight's turned base (Profile in pieces.ts). */
-const BASE_TOP = 0.255;
+/** Top of the knight's turned base (Profile in pieces.ts, scaled up by TURNED_SCALE). */
+const BASE_TOP = 0.255 * TURNED_SCALE;
 /** Rearing pitch at its peak (radians). */
 const REAR = 0.62;
 
