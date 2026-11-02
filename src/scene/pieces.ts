@@ -1,6 +1,8 @@
 import {
   Box3,
+  BoxGeometry,
   ConeGeometry,
+  CylinderGeometry,
   ExtrudeGeometry,
   Group,
   LatheGeometry,
@@ -15,6 +17,7 @@ import {
   Euler,
   type BufferGeometry,
 } from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Board, Color, PieceType } from '../game';
 import { squareToWorld } from './board';
 import { getMaterials, type Detail } from './materials';
@@ -28,6 +31,8 @@ interface Part {
   readonly matrix?: Matrix4;
   /** Turned base (foot + rings): stays visible when a character stands on it. */
   readonly base?: true;
+  /** Chariot wheel: its own mesh, spun about its local z (the axle) by the animator. */
+  readonly wheel?: true;
 }
 
 interface Res {
@@ -71,6 +76,20 @@ function pawn(r: Res): Part[] {
   return [{ geo: lathe(p, r), finish: 'body' }, footRing(0.27, 0.14, r), ring(0.157, 0.365, 0.014, r)];
 }
 
+export const ROOK_WHEEL_RADIUS = 0.165;
+const ROOK_WHEEL_Z = 0.335;
+
+/** Spoked wheel in the xy plane (axle = z): rim, six spokes, hub. One merged geometry so it spins as one. */
+function wheelGeometry(r: Res): BufferGeometry {
+  const R = ROOK_WHEEL_RADIUS;
+  const parts: BufferGeometry[] = [new TorusGeometry(R - 0.02, 0.02, 10, r.torus)];
+  for (let i = 0; i < 3; i++) parts.push(new BoxGeometry(2 * (R - 0.03), 0.018, 0.014).rotateZ((i * Math.PI) / 3));
+  parts.push(new CylinderGeometry(0.042, 0.042, 0.06, 16).rotateX(HALF_PI));
+  const geo = mergeGeometries(parts.map((g) => g.toNonIndexed()));
+  for (const g of parts) g.dispose();
+  return geo;
+}
+
 function rook(r: Res): Part[] {
   const p = new Profile()
     .foot(0.3, 0.15, 0.21)
@@ -97,6 +116,13 @@ function rook(r: Res): Part[] {
     });
     parts.push({ geo, finish: 'body', matrix: at(0, 0.808, 0, -HALF_PI) });
   }
+  // War-chariot wheels on the flanks (axle along local z; +x, the ram's forward, faces the enemy).
+  const wheel = wheelGeometry(r);
+  parts.push(
+    { geo: wheel, finish: 'gold', matrix: at(0, ROOK_WHEEL_RADIUS, ROOK_WHEEL_Z), wheel: true },
+    { geo: wheel, finish: 'gold', matrix: at(0, ROOK_WHEEL_RADIUS, -ROOK_WHEEL_Z), wheel: true },
+    { geo: new CylinderGeometry(0.022, 0.022, ROOK_WHEEL_Z * 2, 12), finish: 'gold', matrix: at(0, ROOK_WHEEL_RADIUS, 0, HALF_PI) },
+  );
   // Gold arrow-slit inlays.
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
@@ -273,6 +299,7 @@ function buildPiece(type: PieceType, color: Color, detail: Detail): Group {
     const mesh = new Mesh(part.geo, part.finish === 'gold' ? mats.gold : body);
     if (part.matrix) mesh.applyMatrix4(part.matrix);
     if (part.base) mesh.userData.base = true;
+    if (part.wheel) mesh.userData.wheel = true;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     g.add(mesh);
@@ -280,6 +307,9 @@ function buildPiece(type: PieceType, color: Color, detail: Detail): Group {
   if (type === 'knight') {
     // Head in profile, turned ~25 degrees toward the opponent so it reads from either side.
     g.rotation.y = color === 'white' ? 0.45 : Math.PI - 0.45;
+  } else if (type === 'rook') {
+    // Ram (+x) toward the opponent, so the wheels read side-on from either player's seat.
+    g.rotation.y = color === 'white' ? Math.PI / 2 : -Math.PI / 2;
   }
   return g;
 }
@@ -311,6 +341,8 @@ export function createPieces(initialDetail: Detail = 'high'): PieceLayer {
       restYaw: obj.rotation.y, // the animator's neutral facing
       phase: phase / 1000, // idle-sway offset so pieces don't breathe in lockstep
       height: new Box3().setFromObject(obj).max.y,
+      wheels: obj.children.filter((c) => c.userData.wheel === true),
+      wheelRadius: ROOK_WHEEL_RADIUS,
     };
     return obj;
   };
