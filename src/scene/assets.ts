@@ -16,19 +16,34 @@ export interface ModelAsset {
 }
 
 export const MODEL_ASSETS = {
+  /** Rigged horse + rider: the knight's fallback when the Meshy knight statue fails to load. */
   horse: { kind: 'piece', piece: 'knight', base: 'models/quaternius-horse/Horse.glb' },
   pawn: { kind: 'piece', piece: 'pawn', base: 'models/pieces/pawn_white.glb' },
   /** Previous rigged spearman, now unused by the game (kept for scene/figure.ts and its test). */
   spearman: { kind: 'piece', piece: 'pawn', base: 'models/pawn/Pawn.glb' },
   rook: { kind: 'piece', piece: 'rook', base: 'models/pieces/rook_white.glb' },
+  knight: { kind: 'piece', piece: 'knight', base: 'models/pieces/knight_white.glb' },
+  bishop: { kind: 'piece', piece: 'bishop', base: 'models/pieces/bishop_white.glb' },
+  queen: { kind: 'piece', piece: 'queen', base: 'models/pieces/queen_white.glb' },
+  king: { kind: 'piece', piece: 'king', base: 'models/pieces/king_white.glb' },
 } as const satisfies Readonly<Record<string, ModelAsset>>;
+
+/** The sculpted (Meshy) statue each piece type stands as on the board; every type has one. */
+export const STATUE_ASSET = {
+  pawn: 'pawn',
+  rook: 'rook',
+  knight: 'knight',
+  bishop: 'bishop',
+  queen: 'queen',
+  king: 'king',
+} as const satisfies Readonly<Record<PieceType, AssetName>>;
 
 export type AssetName = keyof typeof MODEL_ASSETS;
 
 /**
  * Overall height of each piece on the board, foot of the pedestal to the crown, in board squares.
  * One table for every piece: sculpted models are scaled to it at load (scene/statue.ts), and the
- * turned procedural pieces are checked against it (tests/assets.test.ts), so a new Meshy file lands
+ * turned procedural fallbacks are checked against it (tests/heights.test.ts), so a new Meshy file lands
  * at the right size. Order: king > queen > rook, knight, bishop > pawn.
  */
 export const TARGET_HEIGHT: Readonly<Record<PieceType, number>> = {
